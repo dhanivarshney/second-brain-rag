@@ -5,9 +5,10 @@ from ingest import get_vectorstore
 LLM_MODEL = "llama3.2"
 
 PROMPT_TEMPLATE = """
-Tum ek helpful assistant ho jo sirf diye gaye context ke base par jawab deta hai.
-Agar context me answer nahi hai, to bol do "Mujhe is document me ye information nahi mili."
-Koi cheez khud se mat banao (hallucinate mat karo).
+You are a helpful assistant that answers questions based only on the given context.
+Answer in the same language as the question was asked.
+If the answer is not present in the context, say so clearly.
+Do not make up any information.
 
 Context:
 {context}
