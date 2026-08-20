@@ -128,7 +128,11 @@ if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
 if "files_ingested" not in st.session_state:
-    st.session_state.files_ingested = []
+    # Uploads folder me jo bhi files already hain unhe list me daalo
+    if os.path.exists(UPLOAD_DIR):
+        st.session_state.files_ingested = os.listdir(UPLOAD_DIR)
+    else:
+        st.session_state.files_ingested = []
 
 if "viewing_file" not in st.session_state:
     st.session_state.viewing_file = None
@@ -272,13 +276,16 @@ if user_query:
 
     with st.chat_message("assistant", avatar="🧠"):
         with st.spinner("Thinking through your documents..."):
-            result = ask_question(user_query)
+            result = ask_question(user_query, chat_history=st.session_state.chat_history)
             st.write(result["answer"])
             if result["sources"]:
-                with st.expander("📌 View Sources"):
-                    for src in result["sources"]:
-                        st.markdown(f"- `{src}`")
-
+             with st.expander("📌 View Sources"):
+              for src in result["sources"]:
+            # src format: "uploads/filename.pdf (page 2)"
+               filename = src.split(" (page")[0].split("\\")[-1].split("/")[-1]
+               if st.button(f"📄 {src}", key=f"src_{filename}_{src}"):
+                 st.session_state.viewing_file = filename
+                 st.rerun()
     st.session_state.chat_history.append({
         "role": "assistant",
         "content": result["answer"],

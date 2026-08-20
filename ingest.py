@@ -3,21 +3,56 @@ from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, Te
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
+import fitz  # pymupdf
+import pytesseract
+from PIL import Image
+import io
+
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+def load_pdf_with_ocr(file_path):
+    """Scanned PDF se OCR ke through text nikalo"""
+    from langchain_core.documents import Document
+    
+    doc = fitz.open(file_path)
+    documents = []
+    
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+        
+        # Pehle normal text try karo
+        text = page.get_text().strip()
+        
+        # Agar text khali hai, to OCR karo
+        if not text:
+            pix = page.get_pixmap(dpi=200)
+            img_data = pix.tobytes("png")
+            img = Image.open(io.BytesIO(img_data))
+            text = pytesseract.image_to_string(img)
+        
+        if text.strip():
+            documents.append(Document(
+                page_content=text,
+                metadata={"source": file_path, "page": page_num}
+            ))
+    
+    doc.close()
+    return documents
 
 DB_DIR = "db"
 UPLOAD_DIR = "uploads"
 
 def load_file(file_path):
-    """File extension ke hisaab se sahi loader use karo"""
     if file_path.endswith(".pdf"):
-        loader = PyPDFLoader(file_path)
+        return load_pdf_with_ocr(file_path)
     elif file_path.endswith(".docx"):
         loader = Docx2txtLoader(file_path)
+        return loader.load()
     elif file_path.endswith(".txt"):
         loader = TextLoader(file_path, encoding="utf-8")
+        return loader.load()
     else:
         raise ValueError(f"Unsupported file type: {file_path}")
-    return loader.load()
 
 def chunk_documents(documents, chunk_size=1000, chunk_overlap=150):
     """Documents ko chhote chunks me todo"""
