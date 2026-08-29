@@ -1,14 +1,8 @@
-from langchain_community.document_loaders import PyPDFLoader
+from ingest import get_vectorstore
 
-loader = PyPDFLoader("uploads/mechanics.pdf")
-docs = loader.load()
+db = get_vectorstore()
+results = db.similarity_search("classification bta de cyber crime ki", k=12)
 
-print(f"Total pages loaded: {len(docs)}")
-
-for i in [0, 10, 30, 50, 100]:
-    print(f"\n--- Page {i} content ---")
-    content = docs[i].page_content.strip()
-    if content:
-        print(content[:300])
-    else:
-        print("(EMPTY - no text extracted)")
+for i, doc in enumerate(results):
+    print(f"\n--- Chunk {i+1} (page {doc.metadata.get('page')}) ---")
+    print(doc.page_content[:200])
