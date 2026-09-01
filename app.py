@@ -113,11 +113,11 @@ st.markdown("""
 st.markdown("""
 <div class="main-header">
     <h1>🧠 Second Brain</h1>
-    <p>Your Private, Offline AI Document & Note Assistant</p>
+    <p>Your AI-Powered Document & Study Assistant</p>
 </div>
 <div class="badge-row">
-    <span class="badge">🔒 100% Offline</span>
-    <span class="badge">⚡ Local LLM</span>
+    <span class="badge">🔒 Local Vector Search</span>
+    <span class="badge">⚡ Fast AI Responses</span>
     <span class="badge">📄 Multi-format</span>
     <span class="badge">🔍 Source Cited</span>
 </div>
@@ -220,10 +220,10 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("""
-    <div class="privacy-box">
-        🔐 Your data never leaves this device.<br>No internet. No cloud. No leaks.
-    </div>
-    """, unsafe_allow_html=True)
+   <div class="privacy-box">
+    🔐 Your documents are processed locally.<br>Only relevant text is sent for AI response generation.
+   </div>
+""", unsafe_allow_html=True)
 
 # ---------- File preview panel ----------
 if st.session_state.viewing_file:
