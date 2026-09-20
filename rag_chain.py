@@ -19,6 +19,16 @@ LLM_MODEL = "openai/gpt-oss-120b"
 RETRIEVAL_K = 12
 NOT_FOUND_MESSAGE = "I could not find this information in the uploaded document(s)."
 
+# Chat modes: "documents" = strict grounding in uploaded files,
+#             "general"   = free assistant using the model's own knowledge.
+MODE_DOCUMENTS = "documents"
+MODE_GENERAL = "general"
+
+NOT_FOUND_HINT = (
+    "\n\n_Tip: you are in **📄 Documents** mode. For general-knowledge questions "
+    "(like 'what is AI'), switch the chat toggle to **⚡ General**._"
+)
+
 PROMPT_TEMPLATE = """
 You are Second Brain, a strict document-grounded assistant.
 
@@ -32,8 +42,9 @@ exactly: "I could not find this information in the uploaded document(s)."
 Then, if useful, state the narrow part that is supported. Never fill missing
 parts with outside knowledge.
 
-Match the user's language and requested level of detail. Do not invent page
-numbers, quotes, citations, examples, or document content.
+Reply in the same language the user used, and default to English unless the user
+wrote in another language. Do not invent page numbers, quotes, citations,
+examples, or document content.
 
 Return only valid JSON, with no Markdown fences, using this exact shape:
 {{"answer": "your answer", "evidence": [{{"source_id": 1, "quote": "an exact copied quote from the excerpt"}}]}}
@@ -49,6 +60,38 @@ Conversation history (interpretation only):
 
 Document excerpts searched for this question:
 {context}
+
+Current question:
+{question}
+"""
+
+GENERAL_PROMPT_TEMPLATE = """
+You are Second Brain in "General" mode — a friendly, knowledgeable assistant.
+
+Answer the current question using your own knowledge. In this mode you are NOT
+restricted to the user's uploaded documents, so general-knowledge questions
+("what is AI", "explain photosynthesis") are expected and welcome.
+
+Language rules (strict):
+- Reply in the SAME language the user wrote in. If the user asked in English,
+  answer fully in English.
+- NEVER reply in Hindi or Hinglish unless the user's own message is in Hindi or
+  Hinglish. Never mix Hindi words into an English answer.
+
+Style rules:
+- Chat casually, like a smart friend on WhatsApp: short paragraphs, simple words,
+  no formal/bureaucratic filler, no "Dear user" or "As an AI language model".
+- Lead with the direct answer in the first line, then add detail only if it helps.
+- Be accurate and reasonably concise. Use Markdown (headings, bullets, code
+  blocks) whenever it makes the answer easier to read.
+- If something is uncertain or very recent, say so honestly instead of inventing facts.
+- Never claim information came from the user's documents, and never fabricate
+  citations, page numbers or quotes in this mode.
+- If the user clearly wants answers grounded in their own files, mention that
+  they can switch the chat toggle to "Documents" mode.
+
+Conversation history:
+{history}
 
 Current question:
 {question}
@@ -106,6 +149,59 @@ def is_greeting(query):
         "hi", "hii", "hiii", "hello", "hey", "hola", "namaste", "namaskar",
         "good morning", "good afternoon", "good evening", "hi there", "hello there",
     }
+
+
+# Small-talk patterns (English + Hinglish). Full-match only, so real questions
+# like "hello, explain SQL injection" are never swallowed by these.
+SMALLTALK_PATTERNS = [
+    ("greeting", r"(hi+|hey+|hello+|yo|hola|namaste|namaskar|good (morning|afternoon|evening)|hi there|hello there)( there| bhai| dost| friend| buddy| yaar| sir| maam| madam| ji)?"),
+    ("how_are_you", r"(how (are|r) (you|u)( doing)?|how('s| is) it going|what'?s up|sup|kais[ae] (ho|hai|hain|he)( aap| tum| bhai| yaar| ji)?|kya haal( hai)?|kya chal raha( hai)?|sab (badhiya|theek)( hai)?)"),
+    ("thanks", r"(thanks?|thank you|thanku|thank u|thx|ty|shukriya|dhanyavad|dhanyawad)( you| bhai| yaar| dost| ji| so much| a lot)?"),
+    ("bye", r"(bye+|byebye|goodbye|see (you|ya)|alvida|ok bye|good night|gn|chalta (hu|hun))"),
+    ("identity", r"(who are you|what are you|what can you do|what do you do|help|tum kaun ho|aap kaun ho|kya kar sakte ho|tumhe kya aata hai)"),
+]
+
+SMALLTALK_REPLIES = {
+    "greeting": {
+        MODE_DOCUMENTS: "Hey! 👋 Ask me anything from your uploaded notes and PDFs — I'll answer with the exact page it came from.",
+        MODE_GENERAL: "Hey! 👋 Ask me anything — concepts, definitions, doubts, whatever you're stuck on.",
+    },
+    "how_are_you": {
+        MODE_DOCUMENTS: "Doing great, thanks! 😄 What do you want me to dig out of your documents?",
+        MODE_GENERAL: "Doing great, thanks! 😄 What do you want to know?",
+    },
+    "thanks": {
+        MODE_DOCUMENTS: "Anytime! 🙌 Ask me anything else from your materials.",
+        MODE_GENERAL: "Anytime! 🙌 Ask me anything else.",
+    },
+    "bye": {
+        MODE_DOCUMENTS: "See you! 👋 Your notes stay saved here whenever you come back.",
+        MODE_GENERAL: "See you! 👋 Come back anytime.",
+    },
+    "identity": {
+        MODE_DOCUMENTS: (
+            "I'm **Second Brain**, your study buddy for your own uploaded notes and PDFs. In 📄 **Documents** mode "
+            "I answer only from your files and show the page, so nothing gets made up. Want general answers instead? "
+            "Flip the toggle to ⚡ **General**."
+        ),
+        MODE_GENERAL: (
+            "I'm **Second Brain**. In ⚡ **General** mode I answer from my own knowledge — any topic, no documents "
+            "needed. Flip the toggle to 📄 **Documents** if you want answers strictly from your uploads."
+        ),
+    },
+}
+
+
+def get_smalltalk_reply(query, mode=MODE_DOCUMENTS):
+    """Return a friendly reply for greetings/small talk, or None for real questions."""
+    text = " ".join(query.lower().split())
+    text = re.sub(r"[!?.,]+$", "", text).strip()
+    if not text:
+        return None
+    for kind, pattern in SMALLTALK_PATTERNS:
+        if re.fullmatch(pattern, text):
+            return SMALLTALK_REPLIES[kind][MODE_GENERAL if mode == MODE_GENERAL else MODE_DOCUMENTS]
+    return None
 
 
 def get_source_details(docs):
@@ -206,21 +302,51 @@ def parse_grounded_response(raw_answer, source_by_id):
 
 # ==================== FEATURE 1: ASK ACROSS ALL DOCUMENTS ====================
 
-def ask_question(query, chat_history=None, k=RETRIEVAL_K, doc_filter=None, username=None):
+def _answer_general(query, history_text, mode):
+    """Free-form answer from the model's own knowledge (no document grounding)."""
+    final_prompt = PromptTemplate(
+        input_variables=["history", "question"], template=GENERAL_PROMPT_TEMPLATE
+    ).format(history=history_text, question=query)
+    try:
+        client = get_llm()
+        response = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a helpful, accurate general assistant. Answer from your own knowledge."},
+                {"role": "user", "content": final_prompt},
+            ],
+            temperature=0.4,
+            max_tokens=1800,
+        )
+        answer = response.choices[0].message.content.strip()
+    except Exception as error:
+        return {
+            "answer": f"Sorry, an error occurred while connecting to the model:\n\n{error}",
+            "sources": [],
+            "source_details": [],
+            "mode": mode,
+        }
+    return {"answer": answer, "sources": [], "source_details": [], "mode": mode}
+
+
+def ask_question(query, chat_history=None, k=RETRIEVAL_K, doc_filter=None, username=None, mode=MODE_DOCUMENTS):
     query = query.strip()
     if not query:
-        return {"answer": "Please enter a question.", "sources": [], "source_details": []}
-    if is_greeting(query):
-        return {
-            "answer": "Hello! I am your Second Brain. Ask me any question across your uploaded documents or study materials!",
-            "sources": [],
-            "source_details": []
-        }
+        return {"answer": "Please enter a question.", "sources": [], "source_details": [], "mode": mode}
+
+    # Greetings / small talk are answered politely in BOTH modes (no "not found" here).
+    smalltalk = get_smalltalk_reply(query, mode=mode)
+    if smalltalk:
+        return {"answer": smalltalk, "sources": [], "source_details": [], "mode": mode}
 
     if username:
         db_manager.log_activity(username, "question_asked", query[:100])
 
     history_text = format_chat_history(chat_history)
+
+    if mode == MODE_GENERAL:
+        return _answer_general(query, history_text, mode)
+
     try:
         vectordb = get_vectorstore()
         docs = retrieve_relevant_docs(vectordb, query, k=k, doc_filter=doc_filter)
@@ -229,7 +355,12 @@ def ask_question(query, chat_history=None, k=RETRIEVAL_K, doc_filter=None, usern
         docs = []
 
     if not docs:
-        return {"answer": NOT_FOUND_MESSAGE, "sources": [], "source_details": []}
+        return {
+            "answer": NOT_FOUND_MESSAGE + NOT_FOUND_HINT,
+            "sources": [],
+            "source_details": [],
+            "mode": mode,
+        }
 
     context, source_by_id = format_docs(docs)
 
@@ -257,10 +388,13 @@ def ask_question(query, chat_history=None, k=RETRIEVAL_K, doc_filter=None, usern
         }
 
     answer, source_details = parse_grounded_response(answer, source_by_id)
+    if answer.strip() == NOT_FOUND_MESSAGE:
+        answer = NOT_FOUND_MESSAGE + NOT_FOUND_HINT
     return {
         "answer": answer,
         "sources": [detail["label"] for detail in source_details],
-        "source_details": source_details
+        "source_details": source_details,
+        "mode": mode,
     }
 
 

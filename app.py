@@ -524,27 +524,72 @@ def render_dashboard():
 # ==================== VIEW 2: ASK SECOND BRAIN (FEATURE 1) ====================
 
 def render_ask_brain():
-    page_heading("Multi-Document RAG", "Ask Across Documents", "Query across all uploaded documents simultaneously. Verified citations and page previews are displayed automatically.")
+    from rag_chain import MODE_DOCUMENTS, MODE_GENERAL, ask_question
+
+    page_heading(
+        "Multi-Document RAG",
+        "Ask Second Brain",
+        "Pick a chat mode: 📄 Documents only gives strictly grounded answers with verified page citations, "
+        "⚡ General knowledge answers from the model's own knowledge. Greetings are handled politely in both modes."
+    )
+
+    mode_labels = {"📄 Documents only": MODE_DOCUMENTS, "⚡ General knowledge": MODE_GENERAL}
+    saved_label = st.session_state.get("chat_mode_label", "📄 Documents only")
+    if saved_label not in mode_labels:
+        saved_label = "📄 Documents only"
+
+    mode_col, scope_col, info_col = st.columns([1.4, 1, 1.3])
+    with mode_col:
+        mode_label = st.radio(
+            "Chat Mode:",
+            list(mode_labels.keys()),
+            index=list(mode_labels).index(saved_label),
+            horizontal=True,
+            help="📄 Documents only: answers strictly from your uploads (with citations). ⚡ General knowledge: no document grounding."
+        )
+    st.session_state.chat_mode_label = mode_label
+    mode = mode_labels[mode_label]
+    general_mode = mode == MODE_GENERAL
 
     docs = get_available_documents()
-    filter_col, info_col = st.columns([1, 1.2])
-    with filter_col:
-        doc_options = ["All Documents"] + docs
-        selected_doc = st.selectbox("Search Scope:", doc_options, index=0)
-        doc_filter = None if selected_doc == "All Documents" else selected_doc
-
-    with info_col:
-        st.markdown(
-            f"<div style='margin-top:1.6rem;'><span class='badge-doc'>Scope: {selected_doc}</span> &nbsp;"
-            f"<span style='color:#8ba3be;font-size:.84rem;'>{len(docs)} documents available in vault</span></div>",
-            unsafe_allow_html=True
-        )
+    if general_mode:
+        doc_filter = None
+        with scope_col:
+            st.markdown(
+                "<div style='margin-top:1.6rem;'><span class='badge-doc'>Scope: ⚡ General knowledge</span></div>",
+                unsafe_allow_html=True
+            )
+        with info_col:
+            st.markdown(
+                "<div style='margin-top:1.6rem;'><span style='color:#8ba3be;font-size:.84rem;'>"
+                "No document grounding — best for general concepts and doubts.</span></div>",
+                unsafe_allow_html=True
+            )
+    else:
+        with scope_col:
+            doc_options = ["All Documents"] + docs
+            selected_doc = st.selectbox("Search Scope:", doc_options, index=0)
+            doc_filter = None if selected_doc == "All Documents" else selected_doc
+        with info_col:
+            st.markdown(
+                f"<div style='margin-top:1.6rem;'><span class='badge-doc'>Scope: {escape(selected_doc)}</span> &nbsp;"
+                f"<span style='color:#8ba3be;font-size:.84rem;'>{len(docs)} documents available in vault</span></div>",
+                unsafe_allow_html=True
+            )
 
     if not st.session_state.chat_history:
+        if general_mode:
+            empty_copy = (
+                "<h3 style='color:#f0f7ff;margin:0'>Ask me anything</h3>"
+                "<p>General knowledge mode — e.g. 'What is AI?', 'Explain photosynthesis', 'Difference between TCP and UDP?'</p>"
+            )
+        else:
+            empty_copy = (
+                "<h3 style='color:#f0f7ff;margin:0'>Ask anything about your documents</h3>"
+                "<p>Example: 'Compare SQL Injection and Buffer Overflow' or 'Explain the classification of cyber crime.'</p>"
+            )
         st.markdown(
-            "<div class='glass-card empty-state'><div class='brain-visual'>🧠</div>"
-            "<h3 style='color:#f0f7ff;margin:0'>Ask anything about your documents</h3>"
-            "<p>Example: 'Compare SQL Injection and Buffer Overflow' or 'Explain the classification of cyber crime.'</p></div>",
+            "<div class='glass-card empty-state'><div class='brain-visual'>🧠</div>" + empty_copy + "</div>",
             unsafe_allow_html=True
         )
 
@@ -552,25 +597,31 @@ def render_ask_brain():
         with st.chat_message(message["role"], avatar="🧠" if message["role"] == "assistant" else "👤"):
             st.markdown(message["content"])
             verified_details = [d for d in message.get("source_details", []) if d.get("evidence") or d.get("source")]
+            if message.get("mode") == MODE_GENERAL:
+                st.markdown("<span class='source-chip'>⚡ General knowledge</span>", unsafe_allow_html=True)
             if verified_details:
                 st.markdown("".join(f"<span class='source-chip'>{escape(d['label'])}</span>" for d in verified_details), unsafe_allow_html=True)
                 render_searched_pages(verified_details, key=f"history_{id(message)}")
 
-    if prompt := st.chat_input("Ask anything across your knowledge base…"):
-        from rag_chain import ask_question
+    placeholder = "Ask me anything (general knowledge)…" if general_mode else "Ask anything across your knowledge base…"
+    if prompt := st.chat_input(placeholder):
         st.session_state.chat_history.append({"role": "user", "content": prompt})
         with st.chat_message("user", avatar="👤"):
             st.markdown(prompt)
 
         with st.chat_message("assistant", avatar="🧠"):
-            with st.spinner("Searching documents and verifying citations…"):
+            spinner_text = ("Thinking…" if general_mode else "Searching documents and verifying citations…")
+            with st.spinner(spinner_text):
                 result = ask_question(
                     prompt,
                     chat_history=st.session_state.chat_history,
                     doc_filter=doc_filter,
-                    username=st.session_state.current_user
+                    username=st.session_state.current_user,
+                    mode=mode
                 )
             st.markdown(result["answer"])
+            if result.get("mode") == MODE_GENERAL:
+                st.markdown("<span class='source-chip'>⚡ General knowledge</span>", unsafe_allow_html=True)
             if result.get("sources"):
                 st.markdown("".join(f"<span class='source-chip'>{escape(s)}</span>" for s in result["sources"]), unsafe_allow_html=True)
             render_searched_pages(result.get("source_details", []), key=f"ans_{len(st.session_state.chat_history)}")
@@ -579,7 +630,8 @@ def render_ask_brain():
             "role": "assistant",
             "content": result["answer"],
             "sources": result.get("sources", []),
-            "source_details": result.get("source_details", [])
+            "source_details": result.get("source_details", []),
+            "mode": result.get("mode", MODE_DOCUMENTS)
         })
 
 
@@ -600,44 +652,51 @@ def render_where_learned():
     if st.button("Find Knowledge Origin", type="primary"):
         if not concept_query.strip():
             st.warning("Please enter a concept or topic.")
-            return
+        else:
+            with st.spinner(f"Locating '{concept_query}' across your document vault…"):
+                st.session_state.where_learned_result = where_did_i_learn(concept_query.strip(), doc_filter=doc_filter)
+            # New run id → preview checkboxes start unchecked for the fresh result set.
+            st.session_state.where_learned_run = st.session_state.get("where_learned_run", 0) + 1
 
-        with st.spinner(f"Locating '{concept_query}' across your document vault…"):
-            result = where_did_i_learn(concept_query.strip(), doc_filter=doc_filter)
+    # Results live in session_state so checkbox/rerun interactions don't wipe them.
+    result = st.session_state.get("where_learned_result")
+    if not result:
+        return
+    run_id = st.session_state.get("where_learned_run", 0)
 
-        if not result.get("found") or not result.get("locations"):
-            st.info(result.get("message", "No mentions found in uploaded materials."))
-            return
+    if not result.get("found") or not result.get("locations"):
+        st.info(result.get("message", "No mentions found in uploaded materials."))
+        return
 
-        st.markdown(f"<div class='glass-card' style='border-color:rgba(112,229,255,.4)'><div class='eyebrow'>Search Summary</div><p style='font-size:1.05rem;color:#e8f4ff;margin:.3rem 0 0;'>{escape(result.get('summary', ''))}</p></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='glass-card' style='border-color:rgba(112,229,255,.4)'><div class='eyebrow'>Search Summary</div><p style='font-size:1.05rem;color:#e8f4ff;margin:.3rem 0 0;'>{escape(result.get('summary', ''))}</p></div>", unsafe_allow_html=True)
 
-        locations = result.get("locations", [])
-        st.markdown(f"### Found in {len(locations)} Location(s):")
-        for idx, loc in enumerate(locations):
-            doc_name = loc.get("document", "Unknown")
-            page_num = loc.get("page", "N/A")
-            section = loc.get("section", "Section")
-            snippet = loc.get("snippet", "")
-            takeaway = loc.get("takeaway", "")
+    locations = result.get("locations", [])
+    st.markdown(f"### Found in {len(locations)} Location(s):")
+    for idx, loc in enumerate(locations):
+        doc_name = loc.get("document", "Unknown")
+        page_num = loc.get("page", "N/A")
+        section = loc.get("section", "Section")
+        snippet = loc.get("snippet", "")
+        takeaway = loc.get("takeaway", "")
 
-            with st.container():
-                st.markdown(
-                    f"""<div class='glass-card'>
-                    <div style='display:flex;justify-content:space-between;align-items:center;'>
-                        <span class='badge-doc'>📄 {escape(doc_name)}</span>
-                        <span class='source-chip'>Page {escape(str(page_num))}</span>
-                    </div>
-                    <h4 style='color:#70e5ff;margin:.6rem 0 .3rem;'>📌 {escape(section)}</h4>
-                    <p style='color:#c5d8ed;font-size:.9rem;line-height:1.6;font-style:italic;background:rgba(0,0,0,.25);padding:8px 12px;border-radius:10px;'>"{escape(snippet)}"</p>
-                    <p style='color:#8ca5be;font-size:.85rem;margin:0;'><strong>Takeaway:</strong> {escape(takeaway)}</p>
-                    </div>""",
-                    unsafe_allow_html=True
-                )
-                # Inline preview if PDF
-                file_path = os.path.join(UPLOAD_DIR, doc_name)
-                if doc_name.lower().endswith(".pdf") and os.path.exists(file_path) and isinstance(page_num, int):
-                    if st.checkbox(f"Preview {doc_name} — Page {page_num}", key=f"preview_loc_{idx}"):
-                        render_pdf_page(file_path, page_num - 1, f"{doc_name} (Page {page_num})")
+        with st.container():
+            st.markdown(
+                f"""<div class='glass-card'>
+                <div style='display:flex;justify-content:space-between;align-items:center;'>
+                    <span class='badge-doc'>📄 {escape(doc_name)}</span>
+                    <span class='source-chip'>Page {escape(str(page_num))}</span>
+                </div>
+                <h4 style='color:#70e5ff;margin:.6rem 0 .3rem;'>📌 {escape(section)}</h4>
+                <p style='color:#c5d8ed;font-size:.9rem;line-height:1.6;font-style:italic;background:rgba(0,0,0,.25);padding:8px 12px;border-radius:10px;'>"{escape(snippet)}"</p>
+                <p style='color:#8ca5be;font-size:.85rem;margin:0;'><strong>Takeaway:</strong> {escape(takeaway)}</p>
+                </div>""",
+                unsafe_allow_html=True
+            )
+            # Inline preview if PDF
+            file_path = os.path.join(UPLOAD_DIR, doc_name)
+            if doc_name.lower().endswith(".pdf") and os.path.exists(file_path) and isinstance(page_num, int):
+                if st.checkbox(f"Preview {doc_name} — Page {page_num}", key=f"preview_loc_{run_id}_{idx}"):
+                    render_pdf_page(file_path, page_num - 1, f"{doc_name} (Page {page_num})")
 
 
 # ==================== VIEW 4: TEACH ME MODE (FEATURE 3) ====================
