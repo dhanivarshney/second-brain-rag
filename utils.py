@@ -70,3 +70,14 @@ def get_kb_analytics():
         "storage_usage": min(100, round((total_size / 500) * 100, 1)), # Assume 500MB quota
         "freshness": "Updated Today" if len(files) > 0 else "No Data"
     }
+
+
+def get_available_documents():
+    """Return sorted list of uploaded documents."""
+    if not os.path.exists(UPLOAD_DIR):
+        return []
+    return sorted(
+        f for f in os.listdir(UPLOAD_DIR)
+        if os.path.isfile(os.path.join(UPLOAD_DIR, f)) and not f.startswith(".")
+    )
+

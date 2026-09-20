@@ -1,12 +1,27 @@
 import os
+from datetime import date, datetime, timedelta
 from html import escape
 
 import streamlit as st
 import streamlit.components.v1 as components
 
 import auth
+import db_manager
+from utils import (
+    clear_uploads,
+    get_available_documents,
+    get_file_size_mb,
+    get_kb_analytics,
+    reset_database,
+)
 
-st.set_page_config(page_title="Second Brain | AI document intelligence", page_icon="🧠", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(
+    page_title="Second Brain | AI Knowledge & Study Assistant",
+    page_icon="🧠",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -14,44 +29,195 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 def inject_styles():
     st.markdown("""<style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
-    :root { --ink:#eaf5ff; --muted:#94a8bd; --line:rgba(175,217,255,.14); --cyan:#70e5ff; }
-    .stApp { background:#060b16; color:var(--ink); font-family:Manrope,sans-serif; }
-    .stApp::before,.stApp::after { display:none; }
-    #MainMenu, footer, header { visibility:hidden; }.block-container { max-width:1240px; padding-top:2.1rem; padding-bottom:3rem; }
-    [data-testid="stSidebar"] { background:rgba(5,11,23,.93)!important; border-right:1px solid var(--line); } [data-testid="stSidebar"] > div:first-child { padding-top:1.5rem; }
-    .stButton > button { border-radius:12px!important; font-family:Manrope,sans-serif!important; font-weight:700!important; min-height:43px; border:1px solid rgba(150,200,255,.18)!important; background:rgba(255,255,255,.035)!important; color:#dcecff!important; transition:.2s ease!important; }
-    .stButton > button:hover { transform:translateY(-1px); border-color:rgba(112,229,255,.68)!important; color:white!important; background:rgba(112,229,255,.09)!important; box-shadow:0 9px 30px rgba(0,0,0,.22); }
-    .stButton > button[kind="primary"] { background:linear-gradient(110deg,#75e8ff,#9194ff)!important; border:0!important; color:#07101e!important; box-shadow:0 10px 26px rgba(102,178,255,.23)!important; }
-    .stTextInput input { border-radius:11px!important; background:rgba(255,255,255,.045)!important; border:1px solid var(--line)!important; color:white!important; }.stTextInput label,.stFileUploader label { color:#b8c8dc!important; font-weight:600!important; }
-    [data-testid="stFileUploaderDropzone"] { border:1px dashed rgba(112,229,255,.45)!important; border-radius:16px!important; background:rgba(89,144,255,.045)!important; padding:1.1rem!important; } [data-testid="stChatMessage"] { border:1px solid var(--line); background:rgba(12,22,40,.6); border-radius:18px; }
-    .brand-lockup { display:flex; align-items:center; gap:11px; padding:0 0 1.7rem; }.brand-mark { width:34px;height:34px;border-radius:11px;position:relative;background:conic-gradient(from 180deg,#70e5ff,#7a72ff,#d298ff,#70e5ff);box-shadow:0 0 22px rgba(112,229,255,.32); }.brand-mark:after{content:"";position:absolute;inset:7px;border-radius:8px;background:#081323}.brand-mark:before{content:"✦";position:absolute;z-index:1;inset:5px;text-align:center;color:#dffbff;font-size:17px}.eyebrow{color:#74e4ff;font:500 .67rem 'DM Mono',monospace;letter-spacing:.17em;text-transform:uppercase}.brand-name{color:white;font-size:.92rem;font-weight:800;letter-spacing:.05em}.nav-caption{color:#6d849d;font:500 .68rem 'DM Mono',monospace;letter-spacing:.11em;margin:1.15rem 0 .48rem}
-    .page-kicker { color:#77e5ff;font:500 .74rem 'DM Mono',monospace;letter-spacing:.15em;text-transform:uppercase}.page-title{font-size:clamp(1.8rem,4vw,2.55rem);letter-spacing:-.055em;margin:.35rem 0 .5rem;color:#f5f9ff}.page-subtitle{color:var(--muted);max-width:670px;line-height:1.7;margin-bottom:1.7rem}.glass-card{background:linear-gradient(145deg,rgba(21,34,59,.72),rgba(8,16,31,.72));border:1px solid var(--line);border-radius:22px;padding:1.35rem;box-shadow:inset 0 1px rgba(255,255,255,.035),0 18px 55px rgba(0,0,0,.15)}.metric-label{color:#9bb0c9;font:500 .68rem 'DM Mono',monospace;letter-spacing:.12em}.metric-value{font-size:1.8rem;font-weight:800;letter-spacing:-.06em;color:white;margin-top:.35rem}.metric-hint{color:#70e5ff;font-size:.76rem;margin-top:.2rem}.file-row{padding:.84rem .1rem;border-bottom:1px solid rgba(175,217,255,.1)}.file-name{color:#e8f4ff;font-weight:700;font-size:.91rem}.file-meta{color:#8298b1;font-size:.75rem;margin-top:3px}.source-chip{display:inline-block;margin:3px 5px 0 0;padding:3px 8px;color:#8deaff;background:rgba(112,229,255,.08);border:1px solid rgba(112,229,255,.18);border-radius:999px;font-size:.7rem}.empty-state{text-align:center;padding:3.2rem 1rem;color:#9cb0c6}.brain-visual{margin:0 auto 1rem;color:#b7f5ff;font-size:4.4rem;line-height:1;filter:drop-shadow(0 0 18px rgba(112,229,255,.68));animation:float 3.5s ease-in-out infinite}
-    .boot-wrap{min-height:calc(100dvh - 10rem);display:flex;align-items:center;justify-content:center;text-align:center;overflow:hidden;padding:2rem 1rem;position:relative;isolation:isolate;background:radial-gradient(circle at 50% 42%,#1c3974 0%,#101d3e 30%,#070d1c 70%);border:1px solid rgba(112,229,255,.12);border-radius:28px}.boot-stage{position:relative;z-index:2;width:min(100%,900px);padding:3rem 1rem}.boot-stage:before{content:"";position:absolute;inset:7% 16%;z-index:-1;background:radial-gradient(ellipse,rgba(91,122,255,.5),transparent 65%);filter:blur(14px);animation:glow-shift 6s ease-in-out infinite}.boot-brain{width:170px;height:170px;margin:0 auto 2.5rem;display:grid;place-items:center;font-size:7.4rem;line-height:1;position:relative;z-index:2;filter:drop-shadow(0 0 26px rgba(112,229,255,.72));animation:pulse 3s ease-in-out infinite}.boot-brain:before,.boot-brain:after{content:"";position:absolute;inset:-10px;border:1px solid rgba(119,226,255,.65);border-radius:50%;animation:orbit 6s linear infinite}.boot-brain:after{inset:-31px;border-color:rgba(159,140,255,.45);animation-direction:reverse;animation-duration:9s}.neural-dot{position:absolute;z-index:2;width:7px;height:7px;border-radius:50%;background:#94f0ff;box-shadow:0 0 16px #70e5ff;animation:drift 4s ease-in-out infinite}.dot-one{top:17%;left:12%}.dot-two{top:27%;right:12%;animation-delay:-1.4s}.dot-three{bottom:21%;left:19%;animation-delay:-2.5s}.dot-four{bottom:28%;right:17%;animation-delay:-.7s}.boot-title{position:relative;z-index:2;font-size:clamp(3.45rem,10vw,7.7rem);font-weight:800;line-height:.92;letter-spacing:-.1em;color:#fff;margin:0;text-shadow:0 0 40px rgba(120,229,255,.42);animation:wordmark-in .9s cubic-bezier(.2,.8,.2,1) both}.boot-title span{display:block;color:#a9f4ff;font-size:clamp(.72rem,1.3vw,1rem);font-family:'DM Mono',monospace;letter-spacing:.52em;margin:.85rem 0 0 .52em;text-transform:uppercase}.boot-copy{position:relative;z-index:2;max-width:550px;margin:1.25rem auto 2.35rem;color:#d0e2f6;font-size:clamp(.94rem,2.2vw,1.1rem);line-height:1.7;animation:fade-up .8s .3s both}.auth-panel{margin-top:7vh;padding:2rem;border-radius:26px;background:linear-gradient(145deg,rgba(17,30,56,.86),rgba(8,15,29,.86));border:1px solid rgba(151,209,255,.18);box-shadow:0 30px 90px rgba(0,0,0,.33)}.auth-art{min-height:460px;padding:2.5rem;border-radius:26px;overflow:hidden;position:relative;background:radial-gradient(circle at 65% 42%,rgba(112,229,255,.25),transparent 18%),linear-gradient(135deg,#172b58,#0b1024 70%);border:1px solid rgba(153,203,255,.14)}.auth-art:after{content:"";position:absolute;width:260px;height:260px;border-radius:50%;border:1px solid rgba(117,234,255,.33);right:-70px;bottom:-70px;box-shadow:0 0 0 26px rgba(117,234,255,.045),0 0 0 52px rgba(117,234,255,.035)}.auth-brain{position:absolute;right:78px;bottom:78px;font-size:6rem;line-height:1;filter:drop-shadow(0 0 20px rgba(112,229,255,.72));animation:float 4s ease-in-out infinite}.status-line{display:flex;gap:9px;align-items:center;color:#97afc8;font-size:.8rem;margin-top:1.2rem}.status-dot{width:7px;height:7px;border-radius:50%;background:#79f3c1;box-shadow:0 0 12px #79f3c1}@keyframes pulse{50%{transform:scale(1.07)}}@keyframes orbit{to{transform:rotate(360deg)}}@keyframes float{50%{transform:translateY(-11px)}}@keyframes drift{50%{transform:translateY(-18px) scale(1.45);opacity:.45}}@keyframes glow-shift{50%{transform:scale(1.13);opacity:.55}}@keyframes wordmark-in{from{opacity:0;transform:translateY(22px);letter-spacing:-.03em}to{opacity:1;transform:translateY(0);letter-spacing:-.1em}}@keyframes fade-up{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}@media(max-width:760px){.block-container{padding:1.2rem .9rem 2rem}.boot-wrap{min-height:calc(100dvh - 7rem);padding:1rem .2rem}.boot-stage{padding:2rem 0}.boot-brain{width:128px;height:128px;font-size:5.6rem;margin-bottom:2rem}.boot-title{font-size:clamp(3.3rem,17vw,5.2rem)}.boot-title span{letter-spacing:.34em;margin-left:.34em}.dot-one{left:4%}.dot-two{right:4%}.auth-art{min-height:270px}}
+    :root {
+        --ink: #eaf5ff;
+        --muted: #94a8bd;
+        --line: rgba(175,217,255,.14);
+        --cyan: #70e5ff;
+        --purple: #a78bfa;
+        --accent-glow: rgba(112, 229, 255, 0.25);
+    }
+    .stApp { background: #060b16; color: var(--ink); font-family: Manrope, sans-serif; }
+    .stApp::before, .stApp::after { display: none; }
+    #MainMenu, footer, header { visibility: hidden; }
+    .block-container { max-width: 1260px; padding-top: 1.8rem; padding-bottom: 3.5rem; }
+    [data-testid="stSidebar"] { background: rgba(5,11,23,.95)!important; border-right: 1px solid var(--line); }
+    [data-testid="stSidebar"] > div:first-child { padding-top: 1.2rem; }
+
+    /* Button styles */
+    .stButton > button {
+        border-radius: 12px!important;
+        font-family: Manrope, sans-serif!important;
+        font-weight: 700!important;
+        min-height: 40px;
+        border: 1px solid rgba(150,200,255,.18)!important;
+        background: rgba(255,255,255,.035)!important;
+        color: #dcecff!important;
+        transition: .2s ease!important;
+    }
+    .stButton > button:hover {
+        transform: translateY(-1px);
+        border-color: rgba(112,229,255,.68)!important;
+        color: white!important;
+        background: rgba(112,229,255,.12)!important;
+        box-shadow: 0 8px 24px rgba(0,0,0,.25);
+    }
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(110deg,#75e8ff,#9194ff)!important;
+        border: 0!important;
+        color: #07101e!important;
+        box-shadow: 0 8px 22px rgba(102,178,255,.28)!important;
+    }
+
+    /* Inputs */
+    .stTextInput input, .stTextArea textarea, .stSelectbox select {
+        border-radius: 11px!important;
+        background: rgba(255,255,255,.045)!important;
+        border: 1px solid var(--line)!important;
+        color: white!important;
+    }
+    .stTextInput label, .stTextArea label, .stSelectbox label, .stFileUploader label, .stRadio label {
+        color: #b8c8dc!important;
+        font-weight: 600!important;
+    }
+    [data-testid="stFileUploaderDropzone"] {
+        border: 1px dashed rgba(112,229,255,.45)!important;
+        border-radius: 16px!important;
+        background: rgba(89,144,255,.045)!important;
+        padding: 1.1rem!important;
+    }
+    [data-testid="stChatMessage"] {
+        border: 1px solid var(--line);
+        background: rgba(12,22,40,.65);
+        border-radius: 18px;
+    }
+
+    /* Typography & brand */
+    .brand-lockup { display: flex; align-items: center; gap: 11px; padding: 0 0 1.2rem; }
+    .brand-mark {
+        width: 34px; height: 34px; border-radius: 11px; position: relative;
+        background: conic-gradient(from 180deg,#70e5ff,#7a72ff,#d298ff,#70e5ff);
+        box-shadow: 0 0 22px rgba(112,229,255,.32);
+    }
+    .brand-mark:after { content: ""; position: absolute; inset: 7px; border-radius: 8px; background: #081323; }
+    .brand-mark:before { content: "✦"; position: absolute; z-index: 1; inset: 5px; text-align: center; color: #dffbff; font-size: 17px; }
+    .eyebrow { color: #74e4ff; font: 600 .68rem 'DM Mono', monospace; letter-spacing: .16em; text-transform: uppercase; }
+    .brand-name { color: white; font-size: .95rem; font-weight: 800; letter-spacing: .05em; }
+    .nav-caption { color: #6d849d; font: 600 .68rem 'DM Mono', monospace; letter-spacing: .12em; margin: 1.1rem 0 .4rem; text-transform: uppercase; }
+
+    .page-kicker { color: #77e5ff; font: 600 .74rem 'DM Mono', monospace; letter-spacing: .15em; text-transform: uppercase; }
+    .page-title { font-size: clamp(1.8rem, 3.5vw, 2.45rem); letter-spacing: -.05em; margin: .3rem 0 .4rem; color: #f5f9ff; font-weight: 800; }
+    .page-subtitle { color: var(--muted); max-width: 700px; line-height: 1.6; margin-bottom: 1.6rem; font-size: .95rem; }
+
+    /* Glass card container */
+    .glass-card {
+        background: linear-gradient(145deg, rgba(21,34,59,.72), rgba(8,16,31,.72));
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 1.35rem;
+        box-shadow: inset 0 1px rgba(255,255,255,.035), 0 16px 45px rgba(0,0,0,.18);
+        margin-bottom: 1rem;
+    }
+    .metric-label { color: #9bb0c9; font: 600 .68rem 'DM Mono', monospace; letter-spacing: .12em; text-transform: uppercase; }
+    .metric-value { font-size: 1.95rem; font-weight: 800; letter-spacing: -.06em; color: white; margin-top: .25rem; }
+    .metric-hint { color: #70e5ff; font-size: .78rem; margin-top: .2rem; }
+
+    /* Custom Badges */
+    .badge-doc {
+        display: inline-block; padding: 3px 9px; border-radius: 999px;
+        background: rgba(112, 229, 255, 0.12); color: #70e5ff;
+        border: 1px solid rgba(112, 229, 255, 0.28); font-size: .74rem; font-weight: 600;
+    }
+    .badge-memory {
+        display: inline-block; padding: 3px 9px; border-radius: 999px;
+        background: rgba(167, 139, 250, 0.14); color: #c4b5fd;
+        border: 1px solid rgba(167, 139, 250, 0.32); font-size: .74rem; font-weight: 600;
+    }
+    .badge-weak {
+        display: inline-block; padding: 4px 10px; border-radius: 999px;
+        background: rgba(255, 107, 107, 0.15); color: #ff8787;
+        border: 1px solid rgba(255, 107, 107, 0.35); font-size: .76rem; font-weight: 600; margin: 3px 4px 3px 0;
+    }
+
+    .source-chip {
+        display: inline-block; margin: 3px 6px 3px 0; padding: 3px 9px;
+        color: #8deaff; background: rgba(112,229,255,.08);
+        border: 1px solid rgba(112,229,255,.2); border-radius: 999px; font-size: .73rem;
+    }
+    .empty-state { text-align: center; padding: 2.8rem 1rem; color: #9cb0c6; }
+    .brain-visual { margin: 0 auto .8rem; color: #b7f5ff; font-size: 3.8rem; filter: drop-shadow(0 0 16px rgba(112,229,255,.68)); }
+    .file-row { padding: .75rem .1rem; border-bottom: 1px solid rgba(175,217,255,.1); }
+    .file-name { color: #e8f4ff; font-weight: 700; font-size: .91rem; }
+    .file-meta { color: #8298b1; font-size: .76rem; margin-top: 3px; }
+
+    /* Quiz Card */
+    .quiz-question-box {
+        background: rgba(16, 28, 52, 0.6);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 1.2rem;
+        margin-bottom: 1.2rem;
+    }
+    .quiz-question-title {
+        color: #f1f7ff;
+        font-weight: 700;
+        font-size: 1.05rem;
+        margin-bottom: .8rem;
+    }
+    .score-banner {
+        text-align: center;
+        padding: 1.8rem;
+        border-radius: 20px;
+        background: linear-gradient(135deg, rgba(28,57,116,.7), rgba(15,28,56,.7));
+        border: 1px solid rgba(112,229,255,.35);
+        margin-bottom: 1.5rem;
+    }
     </style>""", unsafe_allow_html=True)
 
 
 def init_state():
-    for key, value in {"boot_complete": False, "authenticated": False, "current_view": "Workspace", "chat_history": []}.items():
-        if key not in st.session_state: st.session_state[key] = value
+    defaults = {
+        "boot_complete": False,
+        "authenticated": False,
+        "current_user": None,
+        "current_view": "Dashboard",
+        "chat_history": [],
+        "active_quiz": [],
+        "quiz_submitted": False,
+        "quiz_score": 0,
+        "user_answers": {},
+        "quiz_weak_topics": [],
+        "quiz_topic_prefill": "",
+        "open_pdf": None,
+    }
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
     if "files_ingested" not in st.session_state:
-        # Never query Chroma on first paint. A large/locked vector index can
-        # delay the entire splash screen before the user sees anything.
-        st.session_state.files_ingested = sorted(
-            item for item in os.listdir(UPLOAD_DIR)
-            if os.path.isfile(os.path.join(UPLOAD_DIR, item))
-        )
+        st.session_state.files_ingested = get_available_documents()
 
 
 def brand_lockup():
-    st.markdown("<div class='brand-lockup'><div class='brand-mark'></div><div><div class='brand-name'>SECOND BRAIN</div><div class='eyebrow'>Document intelligence</div></div></div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='brand-lockup'><div class='brand-mark'></div>"
+        "<div><div class='brand-name'>SECOND BRAIN</div>"
+        "<div class='eyebrow'>AI Knowledge Assistant</div></div></div>",
+        unsafe_allow_html=True
+    )
 
 
 def page_heading(kicker, title, subtitle):
-    st.markdown(f"<div class='page-kicker'>{escape(kicker)}</div><h1 class='page-title'>{escape(title)}</h1><div class='page-subtitle'>{escape(subtitle)}</div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='page-kicker'>{escape(kicker)}</div>"
+        f"<h1 class='page-title'>{escape(title)}</h1>"
+        f"<div class='page-subtitle'>{escape(subtitle)}</div>",
+        unsafe_allow_html=True
+    )
 
 
 def render_pdf_page(file_path, page_number, caption):
-    """Render one PDF page with PyMuPDF; this needs no optional Streamlit plugin."""
+    """Render one PDF page with PyMuPDF."""
     import fitz
     document = fitz.open(file_path)
     try:
@@ -77,41 +243,52 @@ def render_pdf_document(file_path):
         )
         render_pdf_page(file_path, int(page) - 1, f"Page {page} of {page_count}")
         with open(file_path, "rb") as pdf_file:
-            st.download_button("Download PDF", pdf_file.read(), file_name=os.path.basename(file_path), mime="application/pdf", key=f"download_{os.path.basename(file_path)}")
+            st.download_button(
+                "Download PDF", pdf_file.read(),
+                file_name=os.path.basename(file_path),
+                mime="application/pdf",
+                key=f"download_{os.path.basename(file_path)}"
+            )
     except Exception as error:
         st.error(f"Could not display this PDF: {error}")
 
 
 def render_searched_pages(source_details, key):
-    """Show only the document pages the model cited for its answer."""
-    source_details = [detail for detail in source_details if detail.get("evidence")]
+    """Show document pages cited for an answer with expandable preview."""
+    source_details = [d for d in source_details if d.get("source")]
     if not source_details:
         return
-    with st.expander(f"PDF pages used for this answer ({len(source_details)})", expanded=False):
-        st.caption("Each shown page includes a verified quote that was used as evidence for this response.")
-        pdf_pages = [detail for detail in source_details if detail.get("source", "").lower().endswith(".pdf") and isinstance(detail.get("page"), int) and os.path.exists(detail.get("source", ""))]
+    with st.expander(f"📚 Sources & Citations ({len(source_details)})", expanded=False):
+        pdf_pages = [
+            d for d in source_details
+            if d.get("source", "").lower().endswith(".pdf")
+            and isinstance(d.get("page"), int)
+            and os.path.exists(d.get("source", ""))
+        ]
         if not pdf_pages:
             for detail in source_details:
-                st.write(f"• {detail.get('label', 'Document page')}")
+                st.write(f"• {detail.get('label', 'Document excerpt')}")
             return
-        st.caption("Click one page to open only that page.")
+
+        st.caption("Click a source to inspect verified evidence and preview the original page:")
         selected_key = f"{key}_selected_page"
-        button_columns = st.columns(min(3, len(pdf_pages)))
-        for index, detail in enumerate(pdf_pages):
-            page_identifier = f"{detail['source']}::{detail['page']}"
-            with button_columns[index % len(button_columns)]:
-                if st.button(detail["label"], key=f"{key}_open_{index}", use_container_width=True):
-                    st.session_state[selected_key] = page_identifier
-        selected_identifier = st.session_state.get(selected_key)
-        selected = next((detail for detail in pdf_pages if f"{detail['source']}::{detail['page']}" == selected_identifier), None)
+        cols = st.columns(min(3, len(pdf_pages)))
+        for idx, detail in enumerate(pdf_pages):
+            page_id = f"{detail['source']}::{detail['page']}"
+            with cols[idx % len(cols)]:
+                if st.button(detail["label"], key=f"{key}_btn_{idx}", use_container_width=True):
+                    st.session_state[selected_key] = page_id
+
+        selected_id = st.session_state.get(selected_key)
+        selected = next((d for d in pdf_pages if f"{d['source']}::{d['page']}" == selected_id), None)
         if selected:
+            for quote in selected.get("evidence", []):
+                st.caption("Verbatim Quote Verified:")
+                st.code(quote, language=None)
             try:
-                for quote in selected.get("evidence", []):
-                    st.caption("Verified evidence from this page")
-                    st.code(quote, language=None)
                 render_pdf_page(selected["source"], selected["page"], selected["label"])
-            except Exception as error:
-                st.warning(f"{selected['label']} could not be previewed: {error}")
+            except Exception as e:
+                st.warning(f"Preview unavailable: {e}")
 
 
 def render_boot():
@@ -120,16 +297,14 @@ def render_boot():
         st.query_params.clear()
         st.rerun()
 
-    # Isolated component prevents Streamlit's own heading/button CSS from
-    # interfering with the splash animation.
     components.html("""
     <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
     <style>
-    *{box-sizing:border-box}body{margin:0;background:#070d1c;color:#f6fbff;font-family:Arial,sans-serif;overflow:hidden}.stage{min-height:670px;padding:40px 24px;display:grid;place-items:center;text-align:center;position:relative;isolation:isolate;background:radial-gradient(circle at 50% 42%,#1d3d7c 0%,#111f42 31%,#070d1c 72%)}.stage:before{content:"";position:absolute;inset:0;opacity:.38;background-image:linear-gradient(rgba(149,220,255,.1) 1px,transparent 1px),linear-gradient(90deg,rgba(149,220,255,.1) 1px,transparent 1px);background-size:48px 48px;mask-image:radial-gradient(circle,black,transparent 70%);z-index:-1}.halo{width:178px;height:178px;display:grid;place-items:center;margin:0 auto 27px;position:relative;font-size:116px;line-height:1;filter:drop-shadow(0 0 25px rgba(104,231,255,.8));animation:pulse 3s ease-in-out infinite}.halo:before,.halo:after{content:"";position:absolute;border:1px solid rgba(139,238,255,.7);border-radius:50%;inset:-8px;animation:spin 6s linear infinite}.halo:after{inset:-33px;border-color:rgba(188,150,255,.45);animation-direction:reverse;animation-duration:9s}.dot{width:7px;height:7px;background:#a0f2ff;box-shadow:0 0 18px #70e5ff;border-radius:50%;position:absolute;animation:drift 4s ease-in-out infinite}.d1{top:21%;left:13%}.d2{top:28%;right:14%;animation-delay:-1.2s}.d3{bottom:22%;left:18%;animation-delay:-2.2s}.d4{bottom:26%;right:18%;animation-delay:-.6s}.kicker{font:700 11px monospace;letter-spacing:.22em;color:#8cecff;text-transform:uppercase}.title{margin:17px 0 0;font-size:clamp(52px,9vw,116px);line-height:.88;letter-spacing:-.09em;font-weight:900;text-shadow:0 0 42px rgba(125,230,255,.38);animation:rise .85s ease both}.tagline{margin:20px 0 28px;color:#c4d7ec;font-size:clamp(15px,2vw,18px);line-height:1.65;max-width:570px}.enter{display:inline-block;padding:15px 26px;border-radius:12px;text-decoration:none;color:#07111f;font-weight:800;background:linear-gradient(110deg,#77eaff,#a39cff);box-shadow:0 12px 33px rgba(101,189,255,.38);transition:.2s}.enter:hover{transform:translateY(-3px) scale(1.02);box-shadow:0 17px 42px rgba(101,189,255,.54)}@keyframes pulse{50%{transform:scale(1.07)}}@keyframes spin{to{transform:rotate(360deg)}}@keyframes drift{50%{transform:translateY(-18px) scale(1.5);opacity:.4}}@keyframes rise{from{opacity:0;transform:translateY(25px)}to{opacity:1;transform:translateY(0)}}@media(max-width:600px){.stage{min-height:calc(100vh - 24px);padding:30px 18px}.halo{width:134px;height:134px;font-size:88px;margin-bottom:24px}.title{font-size:clamp(50px,17vw,78px)}.d1{left:5%}.d2{right:5%}}
-    </style></head><body><main class="stage"><i class="dot d1"></i><i class="dot d2"></i><i class="dot d3"></i><i class="dot d4"></i><section><div class="halo">🧠</div><div class="kicker">Your private knowledge layer</div><h1 class="title">SECOND BRAIN</h1><p class="tagline">Think deeper. Remember everything.<br>The AI-powered document and note assistant.</p></section></main></body></html>
-    """, height=620, scrolling=False)
-    _, entry_column, _ = st.columns([1.2, 1, 1.2])
-    with entry_column:
+    *{box-sizing:border-box}body{margin:0;background:#070d1c;color:#f6fbff;font-family:Arial,sans-serif;overflow:hidden}.stage{min-height:640px;padding:40px 24px;display:grid;place-items:center;text-align:center;position:relative;isolation:isolate;background:radial-gradient(circle at 50% 42%,#1d3d7c 0%,#111f42 31%,#070d1c 72%)}.stage:before{content:"";position:absolute;inset:0;opacity:.38;background-image:linear-gradient(rgba(149,220,255,.1) 1px,transparent 1px),linear-gradient(90deg,rgba(149,220,255,.1) 1px,transparent 1px);background-size:48px 48px;mask-image:radial-gradient(circle,black,transparent 70%);z-index:-1}.halo{width:160px;height:160px;display:grid;place-items:center;margin:0 auto 24px;position:relative;font-size:105px;line-height:1;filter:drop-shadow(0 0 25px rgba(104,231,255,.8));animation:pulse 3s ease-in-out infinite}.halo:before,.halo:after{content:"";position:absolute;border:1px solid rgba(139,238,255,.7);border-radius:50%;inset:-8px;animation:spin 6s linear infinite}.halo:after{inset:-30px;border-color:rgba(188,150,255,.45);animation-direction:reverse;animation-duration:9s}.kicker{font:700 11px monospace;letter-spacing:.22em;color:#8cecff;text-transform:uppercase}.title{margin:15px 0 0;font-size:clamp(48px,8vw,108px);line-height:.9;letter-spacing:-.09em;font-weight:900;text-shadow:0 0 42px rgba(125,230,255,.38)}.tagline{margin:18px 0 28px;color:#c4d7ec;font-size:clamp(15px,2vw,18px);line-height:1.6;max-width:550px}@keyframes pulse{50%{transform:scale(1.07)}}@keyframes spin{to{transform:rotate(360deg)}}
+    </style></head><body><main class="stage"><section><div class="halo">🧠</div><div class="kicker">Personal Knowledge &amp; Study Assistant</div><h1 class="title">SECOND BRAIN</h1><p class="tagline">Remember everything. Retrieve instantly. Teach, test, and master your knowledge.</p></section></main></body></html>
+    """, height=560, scrolling=False)
+    _, entry_col, _ = st.columns([1.2, 1, 1.2])
+    with entry_col:
         if st.button("Enter your workspace  →", type="primary", use_container_width=True, key="splash_entry"):
             st.session_state.boot_complete = True
             st.rerun()
@@ -138,144 +313,987 @@ def render_boot():
 def render_auth():
     left, right = st.columns([1.08, .92], gap="large")
     with left:
-        st.markdown("""<div class='auth-art'><div class='eyebrow'>Your research, amplified</div><h1 style='max-width:420px;font-size:2.5rem;letter-spacing:-.07em;margin-top:1rem'>A calmer way to think with your documents.</h1><p style='max-width:390px;color:#a7bbd2;line-height:1.7'>Bring PDFs, notes and study material together. Ask naturally. Stay in control of your knowledge.</p><div class='auth-brain'>🧠</div></div>""", unsafe_allow_html=True)
+        st.markdown(
+            """<div class='glass-card' style='padding:2.5rem;min-height:430px;'>
+            <div class='eyebrow'>Your Private Brain</div>
+            <h1 style='font-size:2.3rem;letter-spacing:-.06em;margin-top:.8rem'>Think deeper with your documents.</h1>
+            <p style='color:#a7bbd2;line-height:1.7'>Organize lecture notes, PDFs, DOCX files, and personal memories in one private workspace. Ask questions, generate exam answers, and master weak topics.</p>
+            <div style='font-size:5.5rem;margin-top:2rem'>🧠</div>
+            </div>""",
+            unsafe_allow_html=True
+        )
     with right:
-        st.markdown("<div class='auth-panel'>", unsafe_allow_html=True); brand_lockup()
-        st.markdown("<h2 style='margin:0;letter-spacing:-.05em'>Welcome back</h2><p style='color:#95aac1;margin:7px 0 1.3rem'>Sign in to continue to your workspace.</p>", unsafe_allow_html=True)
+        st.markdown("<div class='glass-card' style='padding:2rem;'>", unsafe_allow_html=True)
+        brand_lockup()
+        st.markdown("<h2 style='margin:0;letter-spacing:-.05em'>Sign In</h2><p style='color:#95aac1;margin:6px 0 1.2rem'>Enter your workspace credentials</p>", unsafe_allow_html=True)
         sign_in, register = st.tabs(["Sign in", "Create account"])
         with sign_in:
-            username = st.text_input("Username", key="login_user", placeholder="Your identity")
-            password = st.text_input("Password", key="login_pwd", type="password", placeholder="Your secure password")
-            if st.button("Access workspace", type="primary", use_container_width=True):
+            username = st.text_input("Username", key="login_user", placeholder="Your username")
+            password = st.text_input("Password", key="login_pwd", type="password", placeholder="Your password")
+            if st.button("Access Workspace", type="primary", use_container_width=True):
                 if auth.verify_user(username.strip(), password):
-                    st.session_state.authenticated, st.session_state.current_user = True, username.strip(); st.rerun()
-                st.error("That username or password does not match.")
+                    st.session_state.authenticated = True
+                    st.session_state.current_user = username.strip()
+                    st.session_state.current_view = "Dashboard"
+                    st.rerun()
+                st.error("Invalid username or password.")
         with register:
             new_username = st.text_input("Choose a username", key="register_user")
             new_password = st.text_input("Create a password", key="register_password", type="password")
-            if st.button("Create secure workspace", type="primary", use_container_width=True):
-                if len(new_username.strip()) < 3 or len(new_password) < 6: st.error("Use a username of 3+ characters and a password of 6+ characters.")
-                elif auth.create_user(new_username.strip(), new_password): st.success("Account created. Sign in to enter your workspace.")
-                else: st.error("That username is already in use.")
-        st.markdown("<div class='status-line'><span class='status-dot'></span> Your source files stay on this device.</div></div>", unsafe_allow_html=True)
+            if st.button("Create Account", type="primary", use_container_width=True):
+                if len(new_username.strip()) < 3 or len(new_password) < 6:
+                    st.error("Username must be 3+ characters and password 6+ characters.")
+                elif auth.create_user(new_username.strip(), new_password):
+                    st.success("Account created successfully! Please sign in.")
+                else:
+                    st.error("That username already exists.")
+        st.markdown("<div style='color:#8ca5be;font-size:.8rem;margin-top:1.2rem'>🔒 All documents &amp; memory stay on your machine.</div></div>", unsafe_allow_html=True)
 
 
 def render_sidebar():
     with st.sidebar:
-        brand_lockup(); st.markdown("<div class='nav-caption'>Workspace</div>", unsafe_allow_html=True)
-        for label, view in [("⌁  Ask your brain", "Workspace"), ("▣  Knowledge base", "Vault"), ("◌  System insights", "Insights")]:
-            if st.button(label, key=f"nav_{view}", use_container_width=True): st.session_state.current_view = view; st.rerun()
+        brand_lockup()
+
+        st.markdown("<div class='nav-caption'>Overview</div>", unsafe_allow_html=True)
+        if st.button("🏠  Dashboard", key="nav_Dashboard", use_container_width=True):
+            st.session_state.current_view = "Dashboard"
+            st.rerun()
+
+        st.markdown("<div class='nav-caption'>Intelligence &amp; Chat</div>", unsafe_allow_html=True)
+        views_intel = [
+            ("💬  Ask Second Brain", "Ask"),
+            ("📍  Where Did I Learn This?", "WhereLearned"),
+            ("🧠  My Memory", "Memory"),
+        ]
+        for label, v in views_intel:
+            if st.button(label, key=f"nav_{v}", use_container_width=True):
+                st.session_state.current_view = v
+                st.rerun()
+
+        st.markdown("<div class='nav-caption'>Study Center</div>", unsafe_allow_html=True)
+        views_study = [
+            ("🎓  Teach Me Mode", "TeachMe"),
+            ("🎯  Exam Mode", "ExamMode"),
+            ("🧪  Interactive Quiz", "QuizMode"),
+            ("❓  Question Generator", "QuestionGen"),
+            ("📝  Smart Notes", "SmartNotes"),
+            ("⚖  Compare Documents", "Compare"),
+            ("📅  Study Planner", "StudyPlanner"),
+        ]
+        for label, v in views_study:
+            if st.button(label, key=f"nav_{v}", use_container_width=True):
+                st.session_state.current_view = v
+                st.rerun()
+
+        st.markdown("<div class='nav-caption'>Knowledge Vault</div>", unsafe_allow_html=True)
+        views_vault = [
+            ("📚  My Documents", "Vault"),
+            ("🗺  Knowledge Map", "KnowledgeMap"),
+        ]
+        for label, v in views_vault:
+            if st.button(label, key=f"nav_{v}", use_container_width=True):
+                st.session_state.current_view = v
+                st.rerun()
+
         st.markdown("<div class='nav-caption'>Management</div>", unsafe_allow_html=True)
-        if st.button("⚙  Workspace settings", key="nav_Core", use_container_width=True): st.session_state.current_view = "Core"; st.rerun()
-        st.divider(); st.caption(f"SIGNED IN AS  ·  {st.session_state.current_user.upper()}")
-        if st.button("Log out", use_container_width=True): st.session_state.authenticated = False; st.session_state.current_user = None; st.session_state.current_view = "Workspace"; st.rerun()
+        if st.button("⚙  Workspace Settings", key="nav_Settings", use_container_width=True):
+            st.session_state.current_view = "Settings"
+            st.rerun()
+
+        st.divider()
+        user = st.session_state.current_user or "User"
+        st.caption(f"LOGGED IN AS  ·  {user.upper()}")
+        if st.button("Log out", use_container_width=True):
+            st.session_state.authenticated = False
+            st.session_state.current_user = None
+            st.session_state.current_view = "Dashboard"
+            st.rerun()
 
 
-def render_workspace():
-    page_heading("Your personal knowledge layer", "Ask your brain.", "Ground answers in the documents you trust, then follow your curiosity wherever it leads.")
-    if not st.session_state.chat_history: st.markdown("<div class='glass-card empty-state'><div class='brain-visual'>🧠</div><h3 style='color:#f0f7ff;margin:0'>Your workspace is ready.</h3><p>Upload a document from Knowledge Base, then ask for a summary, explanation, comparison, or answer.</p></div>", unsafe_allow_html=True)
+# ==================== VIEW 1: DASHBOARD (FEATURE 11) ====================
+
+def render_dashboard():
+    user = st.session_state.current_user
+    metrics = db_manager.get_dashboard_metrics(user)
+    analytics = get_kb_analytics()
+
+    page_heading("Command Center", "Second Brain Dashboard", "Real-time overview of your personal document vault, learning progress, and study stats.")
+
+    # 4 Top Hero Metric Cards
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(
+            f"<div class='glass-card'><div class='metric-label'>DOCUMENTS IN VAULT</div>"
+            f"<div class='metric-value'>{analytics['total_files']}</div>"
+            f"<div class='metric-hint'>{analytics['total_size_mb']} MB stored locally</div></div>",
+            unsafe_allow_html=True
+        )
+    with c2:
+        st.markdown(
+            f"<div class='glass-card'><div class='metric-label'>QUESTIONS ASKED</div>"
+            f"<div class='metric-value'>{metrics['questions_asked']}</div>"
+            f"<div class='metric-hint'>Q&A queries resolved</div></div>",
+            unsafe_allow_html=True
+        )
+    with c3:
+        st.markdown(
+            f"<div class='glass-card'><div class='metric-label'>QUIZZES COMPLETED</div>"
+            f"<div class='metric-value'>{metrics['quizzes_completed']}</div>"
+            f"<div class='metric-hint'>Active recall tests</div></div>",
+            unsafe_allow_html=True
+        )
+    with c4:
+        st.markdown(
+            f"<div class='glass-card'><div class='metric-label'>AVERAGE QUIZ SCORE</div>"
+            f"<div class='metric-value'>{metrics['avg_quiz_score']}%</div>"
+            f"<div class='metric-hint'>Accuracy across quizzes</div></div>",
+            unsafe_allow_html=True
+        )
+
+    col_left, col_right = st.columns([1.1, 0.9], gap="large")
+
+    with col_left:
+        # Weak Topics Card
+        st.markdown("<div class='glass-card'><div class='eyebrow'>Knowledge Gaps</div><h3 style='margin:.4rem 0 .8rem'>Weak Topics Identified</h3>", unsafe_allow_html=True)
+        weak_topics = metrics["weak_topics"]
+        if weak_topics:
+            st.write("Topics where questions were missed during quiz sessions:")
+            chips_html = "".join(f"<span class='badge-weak'>⚠ {escape(t)}</span>" for t in weak_topics)
+            st.markdown(chips_html, unsafe_allow_html=True)
+            st.markdown("<div style='height:.8rem'></div>", unsafe_allow_html=True)
+            if st.button("🎯 Practice My Weak Areas Now →", type="primary", use_container_width=True):
+                st.session_state.quiz_topic_prefill = ", ".join(weak_topics[:3])
+                st.session_state.current_view = "QuizMode"
+                st.rerun()
+        else:
+            st.markdown("<p style='color:#8da5be;margin:0'>No weak topics recorded yet! Take an interactive quiz to assess your knowledge gaps.</p>", unsafe_allow_html=True)
+            if st.button("Start a Quiz", key="dash_start_quiz"):
+                st.session_state.current_view = "QuizMode"
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # Quick Actions
+        st.markdown("<div class='glass-card'><div class='eyebrow'>Quick Actions</div><h3 style='margin:.4rem 0 .8rem'>Jump Into Action</h3>", unsafe_allow_html=True)
+        qa1, qa2 = st.columns(2)
+        with qa1:
+            if st.button("💬 Ask Across Documents", use_container_width=True):
+                st.session_state.current_view = "Ask"
+                st.rerun()
+            if st.button("🎓 Teach Me Mode", use_container_width=True):
+                st.session_state.current_view = "TeachMe"
+                st.rerun()
+        with qa2:
+            if st.button("🎯 Exam Mode (Marks)", use_container_width=True):
+                st.session_state.current_view = "ExamMode"
+                st.rerun()
+            if st.button("🧠 Save a Memory", use_container_width=True):
+                st.session_state.current_view = "Memory"
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_right:
+        # Study Plan Progress
+        st.markdown("<div class='glass-card'><div class='eyebrow'>Curriculum Tracker</div><h3 style='margin:.4rem 0 .6rem'>Active Study Plan</h3>", unsafe_allow_html=True)
+        plan = metrics["active_plan"]
+        if plan:
+            st.markdown(f"**Subject:** {plan['subject']} &nbsp;|&nbsp; **Exam Date:** {plan['exam_date']}")
+            st.progress(metrics["study_progress"] / 100.0, text=f"{metrics['study_progress']}% Milestones Completed")
+            if st.button("Open Full Study Planner →", use_container_width=True):
+                st.session_state.current_view = "StudyPlanner"
+                st.rerun()
+        else:
+            st.markdown("<p style='color:#8da5be;margin:0'>No active study plan set. Build a customized schedule for your upcoming exams.</p>", unsafe_allow_html=True)
+            if st.button("Create Study Plan", key="dash_create_plan"):
+                st.session_state.current_view = "StudyPlanner"
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # Personal Memory Summary
+        st.markdown("<div class='glass-card'><div class='eyebrow'>Personal Memory</div><h3 style='margin:.4rem 0 .6rem'>My Saved Notes</h3>", unsafe_allow_html=True)
+        st.markdown(f"You have **{metrics['saved_memories']} personal memories** safely stored.")
+        memories = db_manager.get_memories(user)
+        if memories:
+            for mem in memories[:2]:
+                st.markdown(f"<div style='background:rgba(255,255,255,0.03);padding:8px 12px;border-radius:10px;margin-bottom:6px;'><span class='badge-memory'>🧠 {escape(mem['title'])}</span><div style='font-size:.82rem;color:#c0d2e5;margin-top:4px;'>{escape(mem['content'][:80])}...</div></div>", unsafe_allow_html=True)
+        if st.button("Manage Personal Memories →", use_container_width=True):
+            st.session_state.current_view = "Memory"
+            st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ==================== VIEW 2: ASK SECOND BRAIN (FEATURE 1) ====================
+
+def render_ask_brain():
+    page_heading("Multi-Document RAG", "Ask Across Documents", "Query across all uploaded documents simultaneously. Verified citations and page previews are displayed automatically.")
+
+    docs = get_available_documents()
+    filter_col, info_col = st.columns([1, 1.2])
+    with filter_col:
+        doc_options = ["All Documents"] + docs
+        selected_doc = st.selectbox("Search Scope:", doc_options, index=0)
+        doc_filter = None if selected_doc == "All Documents" else selected_doc
+
+    with info_col:
+        st.markdown(
+            f"<div style='margin-top:1.6rem;'><span class='badge-doc'>Scope: {selected_doc}</span> &nbsp;"
+            f"<span style='color:#8ba3be;font-size:.84rem;'>{len(docs)} documents available in vault</span></div>",
+            unsafe_allow_html=True
+        )
+
+    if not st.session_state.chat_history:
+        st.markdown(
+            "<div class='glass-card empty-state'><div class='brain-visual'>🧠</div>"
+            "<h3 style='color:#f0f7ff;margin:0'>Ask anything about your documents</h3>"
+            "<p>Example: 'Compare SQL Injection and Buffer Overflow' or 'Explain the classification of cyber crime.'</p></div>",
+            unsafe_allow_html=True
+        )
+
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"], avatar="🧠" if message["role"] == "assistant" else "👤"):
             st.markdown(message["content"])
-            verified_details = [detail for detail in message.get("source_details", []) if detail.get("evidence")]
+            verified_details = [d for d in message.get("source_details", []) if d.get("evidence") or d.get("source")]
             if verified_details:
-                st.markdown("".join(f"<span class='source-chip'>{escape(detail['label'])}</span>" for detail in verified_details), unsafe_allow_html=True)
+                st.markdown("".join(f"<span class='source-chip'>{escape(d['label'])}</span>" for d in verified_details), unsafe_allow_html=True)
                 render_searched_pages(verified_details, key=f"history_{id(message)}")
-    if prompt := st.chat_input("Ask anything about your knowledge base…"):
-        # Load the AI pipeline only once the user actually sends a question.
+
+    if prompt := st.chat_input("Ask anything across your knowledge base…"):
         from rag_chain import ask_question
         st.session_state.chat_history.append({"role": "user", "content": prompt})
-        with st.chat_message("user", avatar="👤"): st.markdown(prompt)
-        with st.chat_message("assistant", avatar="🧠"):
-            with st.spinner("Searching your knowledge and composing an answer…"): result = ask_question(prompt, chat_history=st.session_state.chat_history)
-            st.markdown(result["answer"])
-            if result.get("sources"): st.markdown("".join(f"<span class='source-chip'>{escape(source)}</span>" for source in result["sources"]), unsafe_allow_html=True)
-            render_searched_pages(result.get("source_details", []), key=f"answer_{len(st.session_state.chat_history)}")
-        st.session_state.chat_history.append({"role": "assistant", "content": result["answer"], "sources": result.get("sources", []), "source_details": result.get("source_details", [])})
+        with st.chat_message("user", avatar="👤"):
+            st.markdown(prompt)
 
+        with st.chat_message("assistant", avatar="🧠"):
+            with st.spinner("Searching documents and verifying citations…"):
+                result = ask_question(
+                    prompt,
+                    chat_history=st.session_state.chat_history,
+                    doc_filter=doc_filter,
+                    username=st.session_state.current_user
+                )
+            st.markdown(result["answer"])
+            if result.get("sources"):
+                st.markdown("".join(f"<span class='source-chip'>{escape(s)}</span>" for s in result["sources"]), unsafe_allow_html=True)
+            render_searched_pages(result.get("source_details", []), key=f"ans_{len(st.session_state.chat_history)}")
+
+        st.session_state.chat_history.append({
+            "role": "assistant",
+            "content": result["answer"],
+            "sources": result.get("sources", []),
+            "source_details": result.get("source_details", [])
+        })
+
+
+# ==================== VIEW 3: WHERE DID I LEARN THIS? (FEATURE 2) ====================
+
+def render_where_learned():
+    from rag_chain import where_did_i_learn
+    page_heading("Knowledge Origin Finder", "Where Did I Learn This?", "Search your notes, books, and lecture slides to find exact filenames, sections, and pages where a concept is taught.")
+
+    docs = get_available_documents()
+    c1, c2 = st.columns([2.2, 1])
+    with c1:
+        concept_query = st.text_input("Concept or Topic:", placeholder="e.g. SQL Injection, Credit Card Fraud, Salami Attack...")
+    with c2:
+        doc_choice = st.selectbox("Search In:", ["All Documents"] + docs)
+        doc_filter = None if doc_choice == "All Documents" else doc_choice
+
+    if st.button("Find Knowledge Origin", type="primary"):
+        if not concept_query.strip():
+            st.warning("Please enter a concept or topic.")
+            return
+
+        with st.spinner(f"Locating '{concept_query}' across your document vault…"):
+            result = where_did_i_learn(concept_query.strip(), doc_filter=doc_filter)
+
+        if not result.get("found") or not result.get("locations"):
+            st.info(result.get("message", "No mentions found in uploaded materials."))
+            return
+
+        st.markdown(f"<div class='glass-card' style='border-color:rgba(112,229,255,.4)'><div class='eyebrow'>Search Summary</div><p style='font-size:1.05rem;color:#e8f4ff;margin:.3rem 0 0;'>{escape(result.get('summary', ''))}</p></div>", unsafe_allow_html=True)
+
+        locations = result.get("locations", [])
+        st.markdown(f"### Found in {len(locations)} Location(s):")
+        for idx, loc in enumerate(locations):
+            doc_name = loc.get("document", "Unknown")
+            page_num = loc.get("page", "N/A")
+            section = loc.get("section", "Section")
+            snippet = loc.get("snippet", "")
+            takeaway = loc.get("takeaway", "")
+
+            with st.container():
+                st.markdown(
+                    f"""<div class='glass-card'>
+                    <div style='display:flex;justify-content:space-between;align-items:center;'>
+                        <span class='badge-doc'>📄 {escape(doc_name)}</span>
+                        <span class='source-chip'>Page {escape(str(page_num))}</span>
+                    </div>
+                    <h4 style='color:#70e5ff;margin:.6rem 0 .3rem;'>📌 {escape(section)}</h4>
+                    <p style='color:#c5d8ed;font-size:.9rem;line-height:1.6;font-style:italic;background:rgba(0,0,0,.25);padding:8px 12px;border-radius:10px;'>"{escape(snippet)}"</p>
+                    <p style='color:#8ca5be;font-size:.85rem;margin:0;'><strong>Takeaway:</strong> {escape(takeaway)}</p>
+                    </div>""",
+                    unsafe_allow_html=True
+                )
+                # Inline preview if PDF
+                file_path = os.path.join(UPLOAD_DIR, doc_name)
+                if doc_name.lower().endswith(".pdf") and os.path.exists(file_path) and isinstance(page_num, int):
+                    if st.checkbox(f"Preview {doc_name} — Page {page_num}", key=f"preview_loc_{idx}"):
+                        render_pdf_page(file_path, page_num - 1, f"{doc_name} (Page {page_num})")
+
+
+# ==================== VIEW 4: TEACH ME MODE (FEATURE 3) ====================
+
+def render_teach_me():
+    from rag_chain import teach_me
+    page_heading("Pedagogical AI", "Teach Me Mode", "Beginner-friendly explanations that progressively become technical, grounded strictly in your curriculum.")
+
+    docs = get_available_documents()
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        topic = st.text_input("What topic would you like me to teach?", placeholder="e.g. SQL Injection, Buffer Overflow, Public Key Infrastructure")
+    with col2:
+        doc_choice = st.selectbox("Base on Document:", ["Auto-detect across all documents"] + docs)
+        doc_filter = None if doc_choice == "Auto-detect across all documents" else doc_choice
+
+    if st.button("Teach Me This Topic", type="primary"):
+        if not topic.strip():
+            st.warning("Please specify a topic.")
+            return
+
+        with st.spinner(f"Preparing a structured masterclass on '{topic}'…"):
+            response = teach_me(topic.strip(), doc_filter=doc_filter)
+
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.markdown(response)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ==================== VIEW 5: EXAM MODE (FEATURE 4) ====================
+
+def render_exam_mode():
+    from rag_chain import generate_exam_answer
+    page_heading("Exam Ready Answers", "Exam Mode", "Generate high-scoring, structured university answers tailored precisely for 2, 5, 7, or 10 marks.")
+
+    docs = get_available_documents()
+    c1, c2, c3 = st.columns([2, 1.2, 1])
+    with c1:
+        topic = st.text_input("Exam Question or Topic:", placeholder="e.g. Classification of Cyber Crime, Salami Attack, Prevention of SQL Injection")
+    with c2:
+        marks = st.radio("Target Marks:", [2, 5, 7, 10], index=2, horizontal=True)
+    with c3:
+        doc_choice = st.selectbox("Syllabus Source:", ["All Documents"] + docs)
+        doc_filter = None if doc_choice == "All Documents" else doc_choice
+
+    if st.button(f"Generate {marks}-Mark Exam Answer", type="primary"):
+        if not topic.strip():
+            st.warning("Please enter an exam question or topic.")
+            return
+
+        with st.spinner(f"Writing {marks}-mark university answer for '{topic}'…"):
+            answer = generate_exam_answer(topic.strip(), marks=marks, doc_filter=doc_filter)
+
+        st.markdown(f"<div class='glass-card'><div class='eyebrow'>Exam Response · {marks} Marks</div>", unsafe_allow_html=True)
+        st.markdown(answer)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ==================== VIEW 6: QUESTION GENERATOR (FEATURE 5) ====================
+
+def render_question_generator():
+    from rag_chain import generate_questions
+    page_heading("Exam Prep & Viva", "Automatic Question Generator", "Generate customized examination questions, test papers, or viva questions from your documents.")
+
+    docs = get_available_documents()
+    c1, c2, c3 = st.columns([1.5, 1.2, 1])
+    with c1:
+        topic = st.text_input("Topic or Unit Focus:", placeholder="e.g. Cyber Crime Unit 1, Network Attacks")
+    with c2:
+        q_type = st.selectbox("Question Type:", ["MCQs", "2-mark questions", "5-mark questions", "7-mark questions", "Viva questions"])
+    with c3:
+        count = st.slider("Count:", min_value=3, max_value=12, value=5)
+
+    doc_choice = st.selectbox("Target Document:", ["All Uploaded Documents"] + docs)
+    doc_filter = None if doc_choice == "All Uploaded Documents" else doc_choice
+
+    if st.button("Generate Questions", type="primary"):
+        with st.spinner(f"Generating {count} {q_type}…"):
+            output = generate_questions(topic.strip(), question_type=q_type, count=count, doc_filter=doc_filter)
+
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.markdown(output)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ==================== VIEW 7: INTERACTIVE QUIZ MODE (FEATURE 6) ====================
+
+def render_quiz_mode():
+    from rag_chain import generate_quiz
+    page_heading("Interactive Assessment", "Quiz Mode", "Interactive multi-question assessment with automatic scoring, answer explanations, and weak area practice.")
+
+    docs = get_available_documents()
+
+    # Pre-filled topic from "Practice My Weak Areas"
+    prefill = st.session_state.get("quiz_topic_prefill", "")
+    if prefill:
+        st.info(f"🎯 Practicing Weak Areas: **{prefill}**")
+
+    # Quiz Configuration
+    if not st.session_state.active_quiz:
+        c1, c2, c3 = st.columns([2, 1.2, 1])
+        with c1:
+            quiz_topic = st.text_input("Quiz Topic / Subject:", value=prefill, placeholder="e.g. Cyber Crime Classifications, Mobile Devices")
+        with c2:
+            doc_choice = st.selectbox("Quiz Material:", ["All Documents"] + docs)
+            doc_filter = None if doc_choice == "All Documents" else doc_choice
+        with c3:
+            q_count = st.select_slider("Questions:", options=[3, 5, 8, 10], value=5)
+
+        if st.button("Start Quiz", type="primary"):
+            with st.spinner("Generating quiz questions from your notes…"):
+                quiz = generate_quiz(quiz_topic.strip(), count=q_count, doc_filter=doc_filter)
+
+            if not quiz:
+                st.error("Could not generate quiz. Please ensure documents are uploaded or specify a broader topic.")
+                return
+
+            st.session_state.active_quiz = quiz
+            st.session_state.quiz_submitted = False
+            st.session_state.quiz_score = 0
+            st.session_state.user_answers = {}
+            st.session_state.quiz_weak_topics = []
+            st.session_state.quiz_topic_prefill = ""
+            st.rerun()
+
+    # Active Quiz Flow
+    else:
+        quiz = st.session_state.active_quiz
+        st.markdown(f"<div class='eyebrow'>Interactive Quiz ({len(quiz)} Questions)</div>", unsafe_allow_html=True)
+
+        if not st.session_state.quiz_submitted:
+            with st.form("quiz_form"):
+                for idx, q in enumerate(quiz):
+                    st.markdown(
+                        f"<div class='quiz-question-box'>"
+                        f"<div class='quiz-question-title'>Q{idx+1}. {escape(q.get('question', ''))}</div>"
+                        f"<div style='font-size:.75rem;color:#8ca5be;margin-bottom:8px;'>Topic: {escape(q.get('topic', 'General'))}</div>",
+                        unsafe_allow_html=True
+                    )
+                    options = q.get("options", ["A", "B", "C", "D"])
+                    ans = st.radio(
+                        f"Select your answer for Q{idx+1}:",
+                        options,
+                        key=f"q_{idx}",
+                        index=None,
+                        label_visibility="collapsed"
+                    )
+                    st.markdown("</div>", unsafe_allow_html=True)
+                    st.session_state.user_answers[idx] = ans
+
+                submitted = st.form_submit_button("Submit Quiz & Check Score", type="primary")
+                if submitted:
+                    score = 0
+                    weak_topics = []
+                    for idx, q in enumerate(quiz):
+                        user_ans = st.session_state.user_answers.get(idx)
+                        correct_idx = q.get("answer_index", 0)
+                        correct_text = q.get("options", [])[correct_idx] if q.get("options") and correct_idx < len(q.get("options")) else ""
+                        if user_ans == correct_text:
+                            score += 1
+                        else:
+                            t = q.get("topic", "General")
+                            if t and t not in weak_topics:
+                                weak_topics.append(t)
+
+                    st.session_state.quiz_submitted = True
+                    st.session_state.quiz_score = score
+                    st.session_state.quiz_weak_topics = weak_topics
+
+                    # Save to database
+                    user = st.session_state.current_user
+                    topic_label = quiz[0].get("topic", "Quiz")
+                    db_manager.save_quiz_result(user, topic_label, "Vault", score, len(quiz), weak_topics)
+                    st.rerun()
+
+        # Results & Review Screen
+        else:
+            score = st.session_state.quiz_score
+            total = len(quiz)
+            percentage = round((score / total) * 100, 1)
+
+            st.markdown(
+                f"<div class='score-banner'>"
+                f"<div class='eyebrow'>Quiz Completed</div>"
+                f"<h1 style='font-size:3.2rem;margin:.4rem 0;color:#70e5ff;'>{score} / {total}</h1>"
+                f"<div style='font-size:1.1rem;color:#e8f4ff;'>Accuracy: <strong>{percentage}%</strong></div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+            # Weak topics section
+            weak = st.session_state.quiz_weak_topics
+            if weak:
+                st.markdown("<div class='glass-card'><div class='eyebrow'>Needs Review</div><h3 style='margin:.3rem 0 .7rem'>Weak Areas Detected:</h3>", unsafe_allow_html=True)
+                chips = "".join(f"<span class='badge-weak'>⚠ {escape(w)}</span>" for w in weak)
+                st.markdown(chips, unsafe_allow_html=True)
+                st.markdown("<div style='height:.8rem'></div>", unsafe_allow_html=True)
+                if st.button("🎯 Practice My Weak Areas Now", type="primary", use_container_width=True):
+                    st.session_state.quiz_topic_prefill = ", ".join(weak)
+                    st.session_state.active_quiz = []
+                    st.session_state.quiz_submitted = False
+                    st.rerun()
+                st.markdown("</div>", unsafe_allow_html=True)
+
+            # Question by question review
+            st.markdown("### Answer Review & Explanations:")
+            for idx, q in enumerate(quiz):
+                user_ans = st.session_state.user_answers.get(idx)
+                correct_idx = q.get("answer_index", 0)
+                options = q.get("options", [])
+                correct_text = options[correct_idx] if correct_idx < len(options) else ""
+                is_correct = user_ans == correct_text
+
+                card_border = "rgba(121,243,193,.4)" if is_correct else "rgba(255,107,107,.4)"
+                status_badge = "✅ Correct" if is_correct else "❌ Incorrect"
+                st.markdown(
+                    f"<div class='glass-card' style='border-color:{card_border};'>"
+                    f"<div style='display:flex;justify-content:space-between;'>"
+                    f"<strong>Q{idx+1}. {escape(q.get('question', ''))}</strong>"
+                    f"<span>{status_badge}</span></div>"
+                    f"<div style='margin-top:.7rem;font-size:.88rem;'>"
+                    f"Your answer: <code style='color:{'#79f3c1' if is_correct else '#ff8787'}'>{escape(str(user_ans))}</code><br>"
+                    f"Correct answer: <code style='color:#79f3c1'>{escape(correct_text)}</code></div>"
+                    f"<div style='margin-top:.7rem;color:#b2c7dc;font-size:.85rem;background:rgba(0,0,0,.25);padding:8px 12px;border-radius:10px;'>"
+                    f"<strong>Explanation:</strong> {escape(q.get('explanation', ''))}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+            if st.button("Take Another Quiz", use_container_width=True):
+                st.session_state.active_quiz = []
+                st.session_state.quiz_submitted = False
+                st.rerun()
+
+
+# ==================== VIEW 8: SMART NOTES (FEATURE 7) ====================
+
+def render_smart_notes():
+    from rag_chain import generate_smart_notes
+    page_heading("Document Intelligence", "Smart Notes", "Structured, high-yield academic summaries capturing key definitions, frameworks, examples, and exam questions.")
+
+    docs = get_available_documents()
+    if not docs:
+        st.warning("No documents in your vault yet. Please upload files in My Documents first.")
+        return
+
+    c1, c2 = st.columns([1.5, 1])
+    with c1:
+        doc_choice = st.selectbox("Choose Document:", docs)
+    with c2:
+        topic_focus = st.text_input("Optional Topic Focus:", placeholder="Leave empty for full summary")
+
+    if st.button("Generate Smart Notes", type="primary"):
+        with st.spinner(f"Distilling notes for '{doc_choice}'…"):
+            notes = generate_smart_notes(doc_choice, topic=topic_focus.strip() or None)
+
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.markdown(notes)
+        st.download_button(
+            "Download Smart Notes (.md)",
+            data=notes,
+            file_name=f"Smart_Notes_{os.path.splitext(doc_choice)[0]}.md",
+            mime="text/markdown"
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ==================== VIEW 9: COMPARE DOCUMENTS (FEATURE 12) ====================
+
+def render_compare():
+    from rag_chain import compare_documents
+    page_heading("Comparative Analysis", "Compare Documents", "Identify commonalities, sharp differences, unique concepts, and knowledge gaps between two documents.")
+
+    docs = get_available_documents()
+    if len(docs) < 2:
+        st.warning("Please upload at least 2 documents in 'My Documents' to compare them.")
+        return
+
+    c1, c2, c3 = st.columns([1, 1, 1.2])
+    with c1:
+        doc_a = st.selectbox("Document A:", docs, index=0)
+    with c2:
+        doc_b = st.selectbox("Document B:", docs, index=min(1, len(docs)-1))
+    with c3:
+        topic = st.text_input("Comparison Focus (Optional):", placeholder="e.g. Architecture, Security Controls")
+
+    if st.button("Run Comparative Analysis", type="primary"):
+        if doc_a == doc_b:
+            st.warning("Please choose two different documents to compare.")
+            return
+
+        with st.spinner(f"Comparing '{doc_a}' vs '{doc_b}'…"):
+            result = compare_documents(doc_a, doc_b, topic=topic.strip() or None)
+
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        st.markdown(result)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ==================== VIEW 10: PERSONAL MEMORY (FEATURE 9) ====================
+
+def render_memory():
+    user = st.session_state.current_user
+    page_heading("Personal Knowledge Layer", "My Memory", "Save personal notes, formulas, and facts separate from uploaded documents. Search and recall them at any time.")
+
+    tab_browse, tab_add = st.tabs(["📖 Browse & Recall Memories", "➕ Save New Memory"])
+
+    with tab_add:
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        m_title = st.text_input("Title / Topic:", placeholder="e.g. REST API principle, Exam Formula")
+        m_content = st.text_area("Memory Content / Fact:", placeholder="Enter your note, definition, or key takeaway here...", height=120)
+        m_tags = st.text_input("Tags (comma separated):", placeholder="e.g. web, api, networking")
+
+        if st.button("Save to My Memory", type="primary"):
+            if not m_content.strip():
+                st.warning("Please enter note content.")
+            else:
+                db_manager.save_memory(user, m_content, title=m_title, tags=m_tags)
+                st.success(f"Saved to My Memory: '{m_title or 'Note'}'")
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with tab_browse:
+        search_query = st.text_input("Search My Memory:", placeholder="Filter by keyword, title, or tag...")
+        memories = db_manager.get_memories(user, search_query=search_query)
+
+        if not memories:
+            st.markdown(
+                "<div class='empty-state'><div class='brain-visual' style='font-size:3rem;'>🧠</div>"
+                "<p>No personal memories found matching your search. Add one in the 'Save New Memory' tab!</p></div>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(f"<span class='badge-memory'>Showing {len(memories)} Saved Memory Item(s)</span>", unsafe_allow_html=True)
+            for mem in memories:
+                with st.container():
+                    c_text, c_del = st.columns([5, 1])
+                    with c_text:
+                        tag_html = f"<div style='font-size:.75rem;color:#70e5ff;'>🏷 Tags: {escape(mem['tags'])}</div>" if mem.get('tags') else ""
+                        st.markdown(
+                            f"<div class='glass-card' style='margin-bottom:.6rem;'>"
+                            f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+                            f"<span class='badge-memory'>🧠 {escape(mem['title'])}</span>"
+                            f"<span style='color:#758da4;font-size:.75rem;'>{escape(str(mem['created_at'])[:16])}</span>"
+                            f"</div>"
+                            f"<p style='color:#e4f1ff;margin:.6rem 0;line-height:1.6;'>{escape(mem['content'])}</p>"
+                            f"{tag_html}"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+                    with c_del:
+                        if st.button("Delete", key=f"del_mem_{mem['id']}"):
+                            db_manager.delete_memory(user, mem["id"])
+                            st.toast("Memory deleted.")
+                            st.rerun()
+
+
+# ==================== VIEW 11: KNOWLEDGE MAP (FEATURE 8) ====================
+
+def render_knowledge_map():
+    from rag_chain import extract_concept_graph
+    page_heading("Visual Concept Map", "Knowledge Map", "Extract important concepts and their interrelationships from your uploaded documents.")
+
+    docs = get_available_documents()
+    c1, c2 = st.columns([1.5, 1.2])
+    with c1:
+        doc_choice = st.selectbox("Select Document:", ["All Documents"] + docs)
+        doc_filter = None if doc_choice == "All Documents" else doc_choice
+    with c2:
+        topic_focus = st.text_input("Focus Topic (Optional):", placeholder="e.g. Cyber Crime, Network Attacks")
+
+    if st.button("Generate Concept Graph", type="primary"):
+        with st.spinner("Extracting concepts and relationship ontology…"):
+            graph_data = extract_concept_graph(doc_name=doc_filter, focus_topic=topic_focus.strip() or None)
+
+        nodes = graph_data.get("nodes", [])
+        edges = graph_data.get("edges", [])
+
+        if not nodes:
+            st.info("No concepts extracted. Please upload documents with rich textual content.")
+            return
+
+        st.markdown(f"### 🌐 Extracted {len(nodes)} Concepts & {len(edges)} Relationships:")
+
+        # Build clean Mermaid diagram string
+        mermaid_lines = ["graph TD"]
+        # Add styling
+        mermaid_lines.append("classDef root fill:#1c3974,stroke:#70e5ff,stroke-width:2px,color:#fff;")
+        mermaid_lines.append("classDef branch fill:#10254c,stroke:#9194ff,stroke-width:1.5px,color:#fff;")
+        mermaid_lines.append("classDef leaf fill:#0c1933,stroke:#6688aa,stroke-width:1px,color:#dcecff;")
+
+        clean_id_map = {}
+        for idx, node in enumerate(nodes):
+            safe_id = f"node_{idx}"
+            label = node.get("label", "").replace('"', '').replace("'", "")
+            category = node.get("category", "branch")
+            clean_id_map[node.get("id", safe_id)] = (safe_id, label, category)
+            mermaid_lines.append(f'{safe_id}["{label}"]:::{category}')
+
+        for edge in edges:
+            src = edge.get("source")
+            tgt = edge.get("target")
+            rel = edge.get("relationship", "relates_to").replace("_", " ")
+            if src in clean_id_map and tgt in clean_id_map:
+                src_id = clean_id_map[src][0]
+                tgt_id = clean_id_map[tgt][0]
+                mermaid_lines.append(f'{src_id} -->|{rel}| {tgt_id}')
+
+        mermaid_code = "\n".join(mermaid_lines)
+        st.markdown(f"```mermaid\n{mermaid_code}\n```")
+
+        # Tabular details
+        with st.expander("View Concept & Relationship Table"):
+            t_col1, t_col2 = st.columns(2)
+            with t_col1:
+                st.markdown("**Identified Concepts:**")
+                for n in nodes:
+                    st.write(f"• **{n.get('label')}** ({n.get('category', 'concept')})")
+            with t_col2:
+                st.markdown("**Relationships:**")
+                for e in edges:
+                    st.write(f"• `{e.get('source')}` → *{e.get('relationship', '')}* → `{e.get('target')}`")
+
+
+# ==================== VIEW 12: STUDY PLANNER (FEATURE 10) ====================
+
+def render_study_planner():
+    from rag_chain import generate_study_plan_schedule
+    user = st.session_state.current_user
+    page_heading("Exam Strategist", "Study Planner", "Analyze uploaded syllabus materials and generate an active day-by-day study schedule with milestone tracking.")
+
+    latest_plan = db_manager.get_latest_study_plan(user)
+    docs = get_available_documents()
+
+    tab_active, tab_create = st.tabs(["📅 Current Study Plan", "⚡ Create New Plan"])
+
+    with tab_create:
+        st.markdown("<div class='glass-card'>", unsafe_allow_html=True)
+        subject = st.text_input("Subject / Course Name:", placeholder="e.g. Cyber Security, Operating Systems")
+        exam_date = st.date_input("Target Exam Date:", min_value=date.today() + timedelta(days=1), value=date.today() + timedelta(days=7))
+        daily_hours = st.slider("Available Study Hours Per Day:", min_value=1.0, max_value=10.0, value=3.0, step=0.5)
+        selected_materials = st.multiselect("Select Course Documents from Vault:", docs, default=docs[:2] if len(docs) >= 2 else docs)
+
+        if st.button("Generate AI Study Schedule", type="primary"):
+            if not subject.strip():
+                st.warning("Please enter a subject name.")
+            else:
+                with st.spinner(f"Crafting optimized study plan for '{subject}'…"):
+                    schedule = generate_study_plan_schedule(subject.strip(), exam_date, daily_hours, doc_names=selected_materials)
+
+                if schedule:
+                    db_manager.save_study_plan(user, subject.strip(), exam_date, daily_hours, schedule)
+                    st.success("Study plan created and saved!")
+                    st.rerun()
+                else:
+                    st.error("Could not generate schedule. Please check document content or input.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with tab_active:
+        if not latest_plan or not latest_plan.get("schedule"):
+            st.markdown(
+                "<div class='glass-card empty-state'><div class='brain-visual' style='font-size:3rem;'>📅</div>"
+                "<p>No active study plan found. Create one in the 'Create New Plan' tab!</p></div>",
+                unsafe_allow_html=True
+            )
+        else:
+            schedule = latest_plan["schedule"]
+            progress = latest_plan.get("progress", {})
+
+            # Calculate completion
+            total_days = len(schedule)
+            completed_count = sum(1 for v in progress.values() if v)
+            percent = round((completed_count / total_days) * 100) if total_days > 0 else 0
+
+            st.markdown(
+                f"<div class='glass-card'>"
+                f"<div class='eyebrow'>Active Schedule</div>"
+                f"<h2 style='margin:.3rem 0 .2rem;'>{escape(latest_plan['subject'])}</h2>"
+                f"<p style='color:#8ea7c1;font-size:.88rem;'>Target Exam Date: <strong>{latest_plan['exam_date']}</strong> &nbsp;|&nbsp; Daily Commitment: <strong>{latest_plan['daily_hours']} hrs/day</strong></p>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+            st.progress(percent / 100.0, text=f"Progress: {completed_count} of {total_days} Days Completed ({percent}%)")
+
+            # Day by day checklist
+            updated = False
+            for idx, day_info in enumerate(schedule):
+                day_num = day_info.get("day", idx + 1)
+                title = day_info.get("title", f"Day {day_num}")
+                milestone = day_info.get("milestone", "")
+                tasks = day_info.get("tasks", [])
+
+                is_checked = progress.get(str(idx), False)
+
+                with st.container():
+                    c_chk, c_body = st.columns([0.08, 0.92])
+                    with c_chk:
+                        chk = st.checkbox("", value=is_checked, key=f"plan_task_{idx}")
+                        if chk != is_checked:
+                            progress[str(idx)] = chk
+                            updated = True
+                    with c_body:
+                        st.markdown(
+                            f"<div style='background:rgba(255,255,255,0.03);padding:10px 14px;border-radius:12px;margin-bottom:8px;border:1px solid rgba(175,217,255,.1);'>"
+                            f"<strong style='color:{'#79f3c1' if chk else '#e8f4ff'};'>Day {day_num}: {escape(title)}</strong>"
+                            f"<div style='color:#70e5ff;font-size:.78rem;'>🎯 Milestone: {escape(milestone)}</div>"
+                            f"<ul style='margin:6px 0 0;padding-left:20px;font-size:.84rem;color:#b2c8dc;'>"
+                            + "".join(f"<li>{escape(t)}</li>" for t in tasks) +
+                            f"</ul></div>",
+                            unsafe_allow_html=True
+                        )
+
+            if updated:
+                db_manager.update_plan_progress(latest_plan["id"], progress)
+                st.rerun()
+
+
+# ==================== VIEW 13: VAULT / MY DOCUMENTS ====================
 
 def ingest_uploaded_files(uploaded_files, progress_area):
-    # Import PDF/OCR/Chroma dependencies only on the upload screen.
     from ingest import ingest_file
     outcomes = []
     for uploaded_file in uploaded_files:
         safe_name = os.path.basename(uploaded_file.name)
-        if safe_name in st.session_state.files_ingested: outcomes.append(("skipped", safe_name, "Already indexed")); continue
+        if safe_name in st.session_state.files_ingested:
+            outcomes.append(("skipped", safe_name, "Already indexed"))
+            continue
         file_path = os.path.join(UPLOAD_DIR, safe_name)
         try:
-            with open(file_path, "wb") as destination: destination.write(uploaded_file.getbuffer())
+            with open(file_path, "wb") as destination:
+                destination.write(uploaded_file.getbuffer())
             progress_bar = progress_area.progress(0, text=f"Preparing {safe_name}…")
-            def on_progress(stage, percentage): progress_bar.progress(min(max(int(percentage), 0), 100), text=f"{safe_name} · {stage}")
+
+            def on_progress(stage, percentage):
+                progress_bar.progress(min(max(int(percentage), 0), 100), text=f"{safe_name} · {stage}")
+
             chunk_count = ingest_file(file_path, progress_callback=on_progress)
             progress_bar.progress(100, text=f"{safe_name} · indexed successfully")
-            st.session_state.files_ingested.append(safe_name); outcomes.append(("success", safe_name, f"{chunk_count} knowledge chunks indexed"))
+            st.session_state.files_ingested.append(safe_name)
+            outcomes.append(("success", safe_name, f"{chunk_count} knowledge chunks indexed"))
         except Exception as error:
-            if os.path.exists(file_path): os.remove(file_path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
             outcomes.append(("error", safe_name, str(error)))
-    st.session_state.files_ingested.sort(); return outcomes
+    st.session_state.files_ingested.sort()
+    return outcomes
 
 
 def render_vault():
     from ingest import remove_file_from_index
-    from utils import get_file_size_mb
-    page_heading("Knowledge base", "Build your trusted context.", "Upload a PDF, DOCX or TXT file. We extract, segment and index it locally so your next question has real context.")
-    upload_col, files_col = st.columns([.9, 1.35], gap="large")
+    page_heading("Document Vault", "My Documents", "Upload PDFs, DOCX, and TXT files. Files are indexed locally and grounded for instant search.")
+
+    upload_col, files_col = st.columns([0.9, 1.35], gap="large")
     with upload_col:
-        st.markdown("<div class='glass-card'><div class='eyebrow'>Add knowledge</div><h3 style='margin:.55rem 0 .3rem'>Drop files into your vault</h3><p style='color:#9badc4;font-size:.88rem;line-height:1.6'>Each file is processed once. Large or scanned PDFs may take longer because pages need OCR.</p>", unsafe_allow_html=True)
-        uploaded = st.file_uploader("Choose files", type=["pdf", "docx", "txt"], accept_multiple_files=True, label_visibility="collapsed"); progress_area = st.empty()
+        st.markdown(
+            "<div class='glass-card'><div class='eyebrow'>Add Knowledge</div>"
+            "<h3 style='margin:.55rem 0 .3rem'>Drop Files into Vault</h3>"
+            "<p style='color:#9badc4;font-size:.88rem;line-height:1.6'>Scanned or image-based PDFs will automatically invoke OCR.</p>",
+            unsafe_allow_html=True
+        )
+        uploaded = st.file_uploader(
+            "Choose files", type=["pdf", "docx", "txt"],
+            accept_multiple_files=True, label_visibility="collapsed"
+        )
+        progress_area = st.empty()
         if uploaded:
             for state, name, detail in ingest_uploaded_files(uploaded, progress_area):
-                if state == "success": st.success(f"{name} — {detail}")
-                elif state == "error": st.error(f"{name} could not be indexed: {detail}")
-                else: st.info(f"{name} — {detail}")
-        st.markdown("<p style='color:#7890aa;font-size:.75rem;margin:1.1rem 0 0'>Supported: PDF, DOCX and UTF-8 TXT · Your raw files remain on this device.</p></div>", unsafe_allow_html=True)
+                if state == "success":
+                    st.success(f"{name} — {detail}")
+                elif state == "error":
+                    st.error(f"{name} could not be indexed: {detail}")
+                else:
+                    st.info(f"{name} — {detail}")
+        st.markdown("<p style='color:#7890aa;font-size:.75rem;margin:1.1rem 0 0'>Supported: PDF, DOCX, UTF-8 TXT · Files remain on this device.</p></div>", unsafe_allow_html=True)
+
     with files_col:
-        st.markdown("<div class='glass-card'><div class='eyebrow'>Indexed documents</div><h3 style='margin:.55rem 0 1rem'>Your vault</h3>", unsafe_allow_html=True)
-        if not st.session_state.files_ingested: st.markdown("<div class='empty-state' style='padding:2.2rem 1rem'><div class='brain-visual' style='font-size:3.3rem'>🧠</div><p style='margin:0'>No indexed documents yet.</p></div>", unsafe_allow_html=True)
+        st.markdown("<div class='glass-card'><div class='eyebrow'>Indexed Vault Files</div><h3 style='margin:.55rem 0 1rem'>Your Documents</h3>", unsafe_allow_html=True)
+        if not st.session_state.files_ingested:
+            st.markdown("<div class='empty-state' style='padding:2.2rem 1rem;'><div class='brain-visual' style='font-size:3rem;'>🧠</div><p>No indexed documents yet.</p></div>", unsafe_allow_html=True)
+
         for name in list(st.session_state.files_ingested):
-            path = os.path.join(UPLOAD_DIR, name); size = f"{get_file_size_mb(path):.2f} MB" if os.path.exists(path) else "File unavailable"
+            path = os.path.join(UPLOAD_DIR, name)
+            size = f"{get_file_size_mb(path):.2f} MB" if os.path.exists(path) else "File unavailable"
             row, view_action, action = st.columns([4.2, 1, 1])
-            with row: st.markdown(f"<div class='file-row'><div class='file-name'>◫ &nbsp;{escape(name)}</div><div class='file-meta'>{size} · Ready for search</div></div>", unsafe_allow_html=True)
+            with row:
+                st.markdown(f"<div class='file-row'><div class='file-name'>◫ &nbsp;{escape(name)}</div><div class='file-meta'>{size} · Ready for search</div></div>", unsafe_allow_html=True)
             with view_action:
                 if name.lower().endswith(".pdf") and st.button("View", key=f"view_{name}", help=f"Open {name} in the app"):
                     st.session_state.open_pdf = None if st.session_state.get("open_pdf") == name else name
             with action:
-                if st.button("Remove", key=f"remove_{name}", help=f"Remove {name} and its indexed chunks"):
+                if st.button("Remove", key=f"remove_{name}", help=f"Remove {name} from index"):
                     try:
                         remove_file_from_index(path)
-                        if os.path.exists(path): os.remove(path)
-                        st.session_state.files_ingested.remove(name); st.toast(f"Removed {name} from the vault"); st.rerun()
-                    except Exception as error: st.error(f"Could not remove {name}: {error}")
+                        if os.path.exists(path):
+                            os.remove(path)
+                        st.session_state.files_ingested.remove(name)
+                        st.toast(f"Removed {name} from vault")
+                        st.rerun()
+                    except Exception as error:
+                        st.error(f"Could not remove {name}: {error}")
+
             if st.session_state.get("open_pdf") == name and os.path.exists(path):
-                st.markdown(f"<div style='height:.6rem'></div><div class='eyebrow'>Document viewer · {escape(name)}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='height:.6rem'></div><div class='eyebrow'>Document Viewer · {escape(name)}</div>", unsafe_allow_html=True)
                 render_pdf_document(path)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_insights():
-    from utils import get_kb_analytics
-    stats = get_kb_analytics(); page_heading("System insights", "Your knowledge, at a glance.", "A quiet overview of the material currently available to your Second Brain.")
-    labels = ["DOCUMENTS", "STORAGE", "SYSTEM", "INDEX"]; values = [str(stats["total_files"]), f"{stats['total_size_mb']} MB", stats["health"], f"{stats['integrity']}%"]; hints = ["Available to ask", "Local source files", "Knowledge service", "Index integrity"]
-    for column, label, value, hint in zip(st.columns(4), labels, values, hints):
-        with column: st.markdown(f"<div class='glass-card'><div class='metric-label'>{label}</div><div class='metric-value'>{value}</div><div class='metric-hint'>{hint}</div></div>", unsafe_allow_html=True)
-    st.markdown("<div style='height:1rem'></div><div class='glass-card'><div class='eyebrow'>Privacy promise</div><h3 style='margin:.55rem 0'>Your document vault stays local.</h3><p style='color:#9badc4;margin:0;line-height:1.7'>Second Brain stores your uploaded files and vector index in this workspace. Only relevant context is sent when an AI answer is generated.</p></div>", unsafe_allow_html=True)
-
+# ==================== VIEW 14: SETTINGS ====================
 
 def render_settings():
-    from utils import clear_uploads, reset_database
-    page_heading("Workspace settings", "Stay in control.", "Manage your active conversation and, if needed, clear the local knowledge vault.")
-    st.markdown("<div class='glass-card'><div class='eyebrow'>Conversation</div><h3 style='margin:.55rem 0'>Start a fresh chat</h3><p style='color:#9badc4'>Keep your documents, but remove the current conversation from this browser session.</p>", unsafe_allow_html=True)
-    if st.button("Clear chat history"): st.session_state.chat_history = []; st.success("Chat history cleared.")
-    st.markdown("</div><div style='height:1rem'></div><div class='glass-card' style='border-color:rgba(255,117,141,.3)'><div class='eyebrow' style='color:#ff9aab'>Danger zone</div><h3 style='margin:.55rem 0'>Reset the knowledge vault</h3><p style='color:#bca4ad'>This removes every uploaded document and its local vector index. This cannot be undone.</p>", unsafe_allow_html=True)
-    confirm = st.checkbox("I understand this permanently removes my local vault.")
-    if st.button("Reset all local knowledge", disabled=not confirm):
-        reset_database(); clear_uploads(); st.session_state.files_ingested, st.session_state.chat_history = [], []; st.success("Local knowledge vault reset."); st.rerun()
+    page_heading("Workspace Management", "Settings", "Manage conversation history or reset the knowledge base.")
+
+    st.markdown("<div class='glass-card'><div class='eyebrow'>Conversation</div><h3 style='margin:.5rem 0 .3rem;'>Start a Fresh Chat</h3><p style='color:#9badc4'>Clear the active chat history while keeping all your documents and memories intact.</p>", unsafe_allow_html=True)
+    if st.button("Clear Chat History"):
+        st.session_state.chat_history = []
+        st.success("Chat history cleared.")
+
+    st.markdown("</div><div style='height:1rem;'></div><div class='glass-card' style='border-color:rgba(255,117,141,.3);'><div class='eyebrow' style='color:#ff9aab'>Danger Zone</div><h3 style='margin:.5rem 0 .3rem;'>Reset Knowledge Vault</h3><p style='color:#bca4ad'>Permanently delete every uploaded document and the local search index.</p>", unsafe_allow_html=True)
+    confirm = st.checkbox("I understand this permanently clears my local vault.")
+    if st.button("Reset All Knowledge", disabled=not confirm):
+        reset_database()
+        clear_uploads()
+        st.session_state.files_ingested = []
+        st.session_state.chat_history = []
+        st.success("Local knowledge vault reset.")
+        st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-inject_styles(); init_state()
-if not st.session_state.boot_complete: render_boot()
-elif not st.session_state.authenticated: render_auth()
+# ==================== APP ROUTER ====================
+
+inject_styles()
+init_state()
+
+if not st.session_state.boot_complete:
+    render_boot()
+elif not st.session_state.authenticated:
+    render_auth()
 else:
     render_sidebar()
-    {"Workspace": render_workspace, "Vault": render_vault, "Insights": render_insights, "Core": render_settings}[st.session_state.current_view]()
+    views = {
+        "Dashboard": render_dashboard,
+        "Ask": render_ask_brain,
+        "WhereLearned": render_where_learned,
+        "Memory": render_memory,
+        "TeachMe": render_teach_me,
+        "ExamMode": render_exam_mode,
+        "QuizMode": render_quiz_mode,
+        "QuestionGen": render_question_generator,
+        "SmartNotes": render_smart_notes,
+        "Compare": render_compare,
+        "StudyPlanner": render_study_planner,
+        "Vault": render_vault,
+        "KnowledgeMap": render_knowledge_map,
+        "Settings": render_settings,
+    }
+    view_func = views.get(st.session_state.current_view, render_dashboard)
+    view_func()

@@ -119,19 +119,156 @@ def get_indexed_file_names():
     })
 
 
+STOP_WORDS = {
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
+    "any", "are", "aren't", "as", "at", "be", "because", "been", "before", "being",
+    "below", "between", "both", "but", "by", "can", "can't", "cannot", "could",
+    "couldn't", "did", "didn't", "do", "does", "doesn't", "doing", "don't", "down",
+    "during", "each", "few", "for", "from", "further", "had", "hadn't", "has",
+    "hasn't", "have", "haven't", "having", "he", "he'd", "he'll", "he's", "her",
+    "here", "here's", "hers", "herself", "him", "himself", "his", "how", "how's",
+    "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "isn't", "it",
+    "it's", "its", "itself", "let's", "me", "more", "most", "mustn't", "my",
+    "myself", "no", "nor", "not", "of", "off", "on", "once", "only", "or",
+    "other", "ought", "our", "ours", "ourselves", "out", "over", "own", "same",
+    "shan't", "she", "she'd", "she'll", "she's", "should", "shouldn't", "so",
+    "some", "such", "than", "that", "that's", "the", "their", "theirs", "them",
+    "themselves", "then", "there", "there's", "these", "they", "they'd", "they'll",
+    "they're", "they've", "this", "those", "through", "to", "too", "under",
+    "until", "up", "very", "was", "wasn't", "we", "we'd", "we'll", "we're",
+    "we've", "were", "weren't", "what", "what's", "when", "when's", "where",
+    "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with",
+    "won't", "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've",
+    "your", "yours", "yourself", "yourselves", "tell", "explain", "describe",
+    "bta", "de", "kya", "hai", "me", "se", "ko", "ka", "ki", "ke"
+}
+
+
 class LocalVectorStore:
     def __init__(self):
         self.embeddings = LocalHashEmbeddings()
 
-    def similarity_search(self, query, k=8):
+    def similarity_search(self, query, k=8, doc_filter=None):
         query_vector = self.embeddings.embed_query(query)
+        q_tokens = [
+            w for w in re.findall(r"[\w']+", query.lower())
+            if w not in STOP_WORDS and len(w) > 1
+        ]
+        query_lower = query.lower()
+        records = _load_index()
+
+        # Handle document filtering
+        target_docs = None
+        if doc_filter:
+            if isinstance(doc_filter, str):
+                target_docs = {os.path.basename(doc_filter).lower()}
+            elif isinstance(doc_filter, (list, set, tuple)):
+                target_docs = {os.path.basename(d).lower() for d in doc_filter}
+
         scored = []
-        for record in _load_index():
+        for record in records:
+            source_path = record.get("metadata", {}).get("source", "")
+            base_name = os.path.basename(source_path).lower()
+            if target_docs and base_name not in target_docs:
+                continue
+
             vector = record.get("embedding", [])
-            if len(vector) == len(query_vector):
-                scored.append((sum(left * right for left, right in zip(query_vector, vector)), record))
+            # Cosine component
+            vector_score = sum(left * right for left, right in zip(query_vector, vector)) if len(vector) == len(query_vector) else 0.0
+
+            # Keyword & phrase match component (BM25-style frequency + position bonus)
+            text_lower = record["text"].lower()
+            kw_score = 0.0
+            matched_terms = 0
+            for token in q_tokens:
+                if token in text_lower:
+                    matched_terms += 1
+                    count = text_lower.count(token)
+                    kw_score += 2.0 + min(count * 0.4, 3.0)
+
+            # Bonus if multiple query tokens co-occur
+            if len(q_tokens) >= 2 and matched_terms >= 2:
+                kw_score += (matched_terms / len(q_tokens)) * 3.0
+
+            # Bonus for exact phrase matching
+            if len(query_lower) > 5 and query_lower in text_lower:
+                kw_score += 4.0
+
+            total_score = vector_score + kw_score
+            scored.append((total_score, record, base_name))
+
         scored.sort(key=lambda item: item[0], reverse=True)
-        return [Document(page_content=record["text"], metadata=record["metadata"]) for _, record in scored[:k]]
+
+        # Multi-document balancing: If querying across all documents, prevent one single large document from crowding out others
+        if not target_docs and len(scored) > k:
+            doc_groups = {}
+            for item in scored:
+                doc_groups.setdefault(item[2], []).append(item)
+
+            if len(doc_groups) > 1:
+                # Interleave top chunks from distinct matching documents
+                balanced = []
+                # Allow max k//2 from any single document unless others are exhausted
+                per_doc_limit = max(2, (k // len(doc_groups)) + 2)
+                doc_counts = {doc: 0 for doc in doc_groups}
+
+                for item in scored:
+                    doc = item[2]
+                    if doc_counts[doc] < per_doc_limit:
+                        balanced.append(item)
+                        doc_counts[doc] += 1
+                    if len(balanced) >= k:
+                        break
+
+                # Fill remaining if needed
+                if len(balanced) < k:
+                    seen = set(id(item[1]) for item in balanced)
+                    for item in scored:
+                        if id(item[1]) not in seen:
+                            balanced.append(item)
+                            if len(balanced) >= k:
+                                break
+                scored = balanced
+
+        return [Document(page_content=record["text"], metadata=record["metadata"]) for _, record, _ in scored[:k]]
+
+    def get_document_chunks(self, doc_name):
+        """Retrieve all text chunks belonging to a specific document."""
+        target = os.path.basename(doc_name).lower()
+        records = _load_index()
+        docs = []
+        for record in records:
+            source = record.get("metadata", {}).get("source", "")
+            if os.path.basename(source).lower() == target:
+                docs.append(Document(page_content=record["text"], metadata=record["metadata"]))
+        docs.sort(key=lambda d: d.metadata.get("page", 0))
+        return docs
+
+    def get_indexed_documents_summary(self):
+        """Return information about all indexed documents."""
+        records = _load_index()
+        summary = {}
+        for record in records:
+            source = record.get("metadata", {}).get("source", "")
+            if not source:
+                continue
+            name = os.path.basename(source)
+            if name not in summary:
+                summary[name] = {"source": source, "chunks": 0, "pages": set()}
+            summary[name]["chunks"] += 1
+            page = record.get("metadata", {}).get("page")
+            if isinstance(page, int):
+                summary[name]["pages"].add(page)
+
+        return [
+            {
+                "name": name,
+                "source": data["source"],
+                "chunks": data["chunks"],
+                "page_count": len(data["pages"]) if data["pages"] else 1
+            }
+            for name, data in summary.items()
+        ]
 
 
 def ingest_file(file_path, progress_callback=None):
