@@ -4,6 +4,7 @@ import json
 import os
 import re
 from datetime import datetime
+from typing import Dict, List, Any, Optional
 
 import httpx
 from dotenv import load_dotenv
@@ -11,6 +12,17 @@ from groq import Groq
 from langchain_core.prompts import PromptTemplate
 
 import db_manager
+from competencies import (
+    COMPETENCY_CATALOGUE,
+    COMPETENCY_DOMAINS,
+    DOMAIN_STATISTICAL,
+    DOMAIN_TECHNICAL,
+    DOMAIN_DIGITAL_GOV,
+    DOMAIN_BEHAVIOURAL,
+    get_all_competencies,
+    get_competency_meta,
+    map_text_to_competencies,
+)
 from ingest import get_vectorstore
 
 load_dotenv()
@@ -636,7 +648,7 @@ Format cleanly in Markdown with bold questions and collapsible or clearly demarc
 
 # ==================== FEATURE 6: INTERACTIVE QUIZ MODE ====================
 
-def generate_quiz(topic_or_doc, count=5, doc_filter=None, k=12):
+def generate_quiz(topic_or_doc, count=5, doc_filter=None, k=12, competency_domain=None, difficulty="Medium"):
     vectordb = get_vectorstore()
     query = topic_or_doc if topic_or_doc else "key concepts, definitions, core topics"
     docs = retrieve_relevant_docs(vectordb, query, k=k, doc_filter=doc_filter)
@@ -644,10 +656,17 @@ def generate_quiz(topic_or_doc, count=5, doc_filter=None, k=12):
         return []
 
     context, _ = format_docs(docs)
+    sample_doc = os.path.basename(docs[0].metadata.get("source", "Document"))
+    sample_page = docs[0].metadata.get("page", 1)
+    display_page = sample_page + 1 if isinstance(sample_page, int) else sample_page
+
+    domain_instruction = f"Target Competency Domain: {competency_domain}." if competency_domain else "Map each question to its relevant competency domain."
 
     prompt = f"""
 Create an interactive multiple-choice quiz of {count} questions testing understanding of: '{topic_or_doc}'.
-Base the questions on the document excerpts provided.
+Difficulty Level: {difficulty}
+{domain_instruction}
+Base the questions strictly on the document excerpts provided below.
 
 Document Excerpts:
 {context}
@@ -660,8 +679,12 @@ Return a valid JSON array of questions using this exact shape:
     "options": ["Option A", "Option B", "Option C", "Option D"],
     "answer_index": 0,
     "explanation": "Detailed explanation of why this answer is correct based on the text.",
-    "topic": "Specific sub-topic or concept (e.g. SQL Injection, Buffer Overflow, Key Management)",
-    "source": "Document filename or page"
+    "topic": "Specific sub-topic or concept (e.g. Sampling, Probability, Encryption, Classification)",
+    "domain": "Statistical Competencies | Technical Competencies | Digital Governance | Behavioural & Managerial",
+    "skill": "Specific mapped skill from the framework",
+    "difficulty": "{difficulty}",
+    "source_doc": "{sample_doc}",
+    "page": {display_page}
   }}
 ]
 
@@ -672,18 +695,373 @@ Make sure answer_index is an integer from 0 to 3. Provide plausible distractors.
         response = client.chat.completions.create(
             model=LLM_MODEL,
             messages=[
-                {"role": "system", "content": "You are a quiz master. Return only a valid JSON array of questions."},
+                {"role": "system", "content": "You are a quiz master creating grounded capacity-building MCQs for India's Official Statistical System."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.2,
-            max_tokens=2200,
+            max_tokens=2400,
         )
         cleaned = _clean_json_str(response.choices[0].message.content)
         quiz = json.loads(cleaned)
-        return quiz if isinstance(quiz, list) else []
+        if isinstance(quiz, list):
+            for idx, q in enumerate(quiz, start=1):
+                q["id"] = idx
+                if not q.get("source_doc"):
+                    q["source_doc"] = sample_doc
+                if not q.get("page"):
+                    q["page"] = display_page
+                if not q.get("domain"):
+                    q["domain"] = competency_domain or DOMAIN_STATISTICAL
+            return quiz
+        return []
     except Exception as e:
         print(f"Quiz generation error: {e}")
         return []
+
+
+# ==================== SIH26101: COMPETENCY EXTRACTION & ASSESSMENT ====================
+
+def extract_document_competencies(doc_name: str) -> Dict[str, Any]:
+    """Extract key topics, mapped competency domains, and skills from a vault document."""
+    cached = db_manager.get_document_topics(doc_name)
+    if cached:
+        return cached
+
+    vectordb = get_vectorstore()
+    docs = vectordb.get_document_chunks(doc_name)
+    if not docs:
+        docs = vectordb.similarity_search("overview syllabus topics curriculum concepts", k=10, doc_filter=doc_name)
+
+    if not docs:
+        fallback = {
+            "doc_name": doc_name,
+            "topics": [doc_name.replace(".pdf", "").replace("_", " ")],
+            "domains": [DOMAIN_STATISTICAL],
+            "skills": ["Survey Design & Sampling"],
+            "summary": f"Uploaded document: {doc_name}."
+        }
+        db_manager.save_document_topics(doc_name, fallback["topics"], fallback["domains"], fallback["skills"], fallback["summary"])
+        return fallback
+
+    sample_count = min(len(docs), 10)
+    step = max(1, len(docs) // sample_count)
+    sampled = [docs[i] for i in range(0, len(docs), step)][:sample_count]
+    context, _ = format_docs(sampled)
+
+    all_comps = get_all_competencies()
+    comp_list_str = "\n".join(f"- {c} ({get_competency_meta(c)['domain']})" for c in all_comps)
+
+    prompt = f"""
+You are Second Brain's Official Statistical Capacity Building & Competency Extraction Engine.
+Analyze the following document excerpts from '{doc_name}' and extract its topics and competencies.
+
+Document Excerpts:
+{context}
+
+Target Competency Framework (SIH26101):
+{comp_list_str}
+
+Return a valid JSON object with this exact shape:
+{{
+  "doc_name": "{doc_name}",
+  "topics": ["Major Topic 1", "Major Topic 2", "Major Topic 3", "Major Topic 4"],
+  "subtopics": ["Subtopic A", "Subtopic B", "Subtopic C"],
+  "domains": ["Statistical Competencies" or "Technical Competencies" or "Digital Governance" or "Behavioural & Managerial"],
+  "skills": ["Skill 1 from target framework", "Skill 2 from target framework"],
+  "summary": "2-3 sentences summarizing what statistical or technical capacity this document develops."
+}}
+
+Ensure mapped skills strictly match or reflect skills in the target framework.
+Return ONLY valid JSON.
+"""
+    try:
+        client = get_llm()
+        resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": "You are a competency extraction specialist for India's Official Statistical System. Output only valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1,
+            max_tokens=1500
+        )
+        data = json.loads(_clean_json_str(resp.choices[0].message.content))
+        topics = data.get("topics", ["Key Concepts"])
+        domains = data.get("domains", [DOMAIN_STATISTICAL])
+        skills = data.get("skills", ["Survey Design & Sampling"])
+        summary = data.get("summary", f"Learning material from {doc_name}.")
+
+        db_manager.save_document_topics(doc_name, topics, domains, skills, summary)
+        return {
+            "doc_name": doc_name,
+            "topics": topics,
+            "domains": domains,
+            "skills": skills,
+            "summary": summary
+        }
+    except Exception as e:
+        print(f"Competency extraction error: {e}")
+        combined_text = " ".join(d.page_content for d in sampled)
+        matches = map_text_to_competencies(combined_text)
+        top_skills = [m["skill"] for m in matches[:3]] or ["Survey Design & Sampling"]
+        top_domains = list({m["domain"] for m in matches[:3]}) or [DOMAIN_STATISTICAL]
+        fallback = {
+            "doc_name": doc_name,
+            "topics": [doc_name.replace(".pdf", "").replace("_", " ")],
+            "domains": top_domains,
+            "skills": top_skills,
+            "summary": f"Learning material from {doc_name} mapped to {', '.join(top_domains)}."
+        }
+        db_manager.save_document_topics(doc_name, fallback["topics"], fallback["domains"], fallback["skills"], fallback["summary"])
+        return fallback
+
+
+def generate_competency_assessment(domain: Optional[str] = None, count: int = 8, learner_role: str = "Statistical Analyst") -> List[Dict[str, Any]]:
+    """Generate diagnostic assessment MCQs covering competencies for India's Official Statistical System."""
+    target_domains = [domain] if domain and domain in COMPETENCY_DOMAINS else COMPETENCY_DOMAINS
+    domain_str = ", ".join(target_domains)
+
+    prompt = f"""
+You are the Chief Assessment Officer for India's Official Statistical System (MoSPI / NASA Capacity Framework).
+Generate a diagnostic competency assessment of {count} high-quality Multiple Choice Questions (MCQs).
+Target Learner Role: {learner_role}
+Competency Domains to cover: {domain_str}
+
+Framework Competencies to draw questions from:
+1. Statistical Competencies (Survey Design & Sampling, Descriptive & Inferential Statistics, National Accounts & GVA, Price Statistics & Indices, SDG Indicators & Data Quality)
+2. Technical Competencies (Python for Statistical Analysis, SQL & Database Systems, Data Visualization & BI, AI/ML in Official Statistics, R Programming)
+3. Digital Governance (Cybersecurity & Data Privacy, Digital Public Infrastructure & Cloud)
+4. Behavioural & Managerial (Statistical Ethics & Integrity, Project Management & Communication)
+
+Return a valid JSON array of questions using this exact shape:
+[
+  {{
+    "id": 1,
+    "question": "Clear, practical, official-statistics scenario or technical question?",
+    "options": ["Option A", "Option B", "Option C", "Option D"],
+    "answer_index": 0,
+    "domain": "Statistical Competencies | Technical Competencies | Digital Governance | Behavioural & Managerial",
+    "skill": "Exact skill name from framework",
+    "difficulty": "Easy | Medium | Hard",
+    "explanation": "Clear official or theoretical rationale for the correct answer.",
+    "source": "MoSPI Training Manual / NSS Guidelines / UN Principles"
+  }}
+]
+
+Requirements:
+- answer_index must be an integer (0, 1, 2, or 3).
+- Distribute questions across the requested domains.
+- Provide realistic scenarios relevant to government data collection, analysis, cybersecurity, and statistical integrity.
+Return ONLY valid JSON.
+"""
+    try:
+        client = get_llm()
+        resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": "You create rigorous competency assessment question papers for civil service statistical officers."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.2,
+            max_tokens=2600
+        )
+        cleaned = _clean_json_str(resp.choices[0].message.content)
+        questions = json.loads(cleaned)
+        if isinstance(questions, list) and questions:
+            for idx, q in enumerate(questions, start=1):
+                q["id"] = idx
+            return questions
+    except Exception as e:
+        print(f"Dynamic assessment error: {e}")
+
+    # Curated official statistics fallback assessment questions
+    fallback_pool = [
+        {
+            "id": 1,
+            "question": "In multi-stage stratified sampling for household surveys conducted by NSSO, why are villages/urban blocks treated as First Stage Units (FSUs)?",
+            "options": [
+                "To minimize non-sampling errors by creating homogeneous clusters before household listing",
+                "Because complete lists of households nationwide are unavailable without first sampling areas",
+                "To ensure every single individual has an identical non-zero probability without stratification",
+                "Because multi-stage designs have higher precision than simple random sampling with equal sample size"
+            ],
+            "answer_index": 1,
+            "domain": DOMAIN_STATISTICAL,
+            "skill": "Survey Design & Sampling",
+            "difficulty": "Medium",
+            "explanation": "In large-scale surveys, an exhaustive national list of households does not exist prior to listing. Sampling geographical areas (FSUs) first allows enumerators to prepare local listing frames cost-effectively.",
+            "source": "NSSO Survey Methodology Manual (Vol. 1)"
+        },
+        {
+            "id": 2,
+            "question": "Which Python library and method is standard for computing descriptive aggregates across grouping variables in statistical survey microdata?",
+            "options": [
+                "numpy.matrix_multiply()",
+                "pandas.DataFrame.groupby().agg()",
+                "scipy.cluster.vq()",
+                "statsmodels.formula.ols()"
+            ],
+            "answer_index": 1,
+            "domain": DOMAIN_TECHNICAL,
+            "skill": "Python for Statistical Analysis",
+            "difficulty": "Easy",
+            "explanation": "Pandas DataFrame.groupby() along with .agg() is the standard industry method for computing split-apply-combine aggregates across administrative zones and survey strata.",
+            "source": "Python for Data Analysis Guide"
+        },
+        {
+            "id": 3,
+            "question": "Under the Digital Personal Data Protection (DPDP) Act and official statistical guidelines, what technique must be applied before releasing public research microdata?",
+            "options": [
+                "Full symmetric encryption with the public key shared on data.gov.in",
+                "Statistical anonymization, de-identification, and cell suppression for small samples",
+                "Converting all numerical variables to floating point numbers",
+                "Removing only the respondent's phone number while preserving names and exact GPS coordinates"
+            ],
+            "answer_index": 1,
+            "domain": DOMAIN_DIGITAL_GOV,
+            "skill": "Cybersecurity & Data Privacy",
+            "difficulty": "Medium",
+            "explanation": "Microdata dissemination requires statistical anonymization (k-anonymity, l-diversity, perturbation, or cell suppression) so individual respondents cannot be re-identified.",
+            "source": "DPDP Act Guidelines & MoSPI Microdata Policy"
+        },
+        {
+            "id": 4,
+            "question": "According to the UN Fundamental Principles of Official Statistics, what principle governs the obligation to protect individual survey respondents?",
+            "options": [
+                "Principle of Maximum Commercialization",
+                "Strict Confidentiality: data collected for statistical compilation must be strictly confidential and used exclusively for statistical purposes",
+                "Open Access: respondent data must be accessible to any inquiring law enforcement authority without court orders",
+                "Principle of Mandatory Verification by Local Politicians"
+            ],
+            "answer_index": 1,
+            "domain": DOMAIN_BEHAVIOURAL,
+            "skill": "Statistical Ethics & Integrity",
+            "difficulty": "Easy",
+            "explanation": "Principle 6 of the UN Fundamental Principles guarantees strict confidentiality: individual data collected by statistical agencies must be used exclusively for statistical purposes and protected from disclosure.",
+            "source": "UN Fundamental Principles of Official Statistics"
+        },
+        {
+            "id": 5,
+            "question": "In the compilation of Gross Value Added (GVA) at basic prices in National Accounts, what is the formula?",
+            "options": [
+                "GVA at basic prices = Gross Output at basic prices - Intermediate Consumption",
+                "GVA at basic prices = GDP + Net Factor Income from Abroad",
+                "GVA at basic prices = Gross Capital Formation - Consumption of Fixed Capital",
+                "GVA at basic prices = Total Imports - Total Exports"
+            ],
+            "answer_index": 0,
+            "domain": DOMAIN_STATISTICAL,
+            "skill": "National Accounts & GVA",
+            "difficulty": "Medium",
+            "explanation": "By definition in the System of National Accounts (SNA), Gross Value Added (GVA) at basic prices equals Gross Output valued at basic prices minus Intermediate Consumption at purchasers' prices.",
+            "source": "System of National Accounts (SNA 2008) / CSO Manual"
+        },
+        {
+            "id": 6,
+            "question": "Which SQL clause is used to extract state-wise average consumption expenditures and filter only those states where survey sample counts exceed 500 households?",
+            "options": [
+                "WHERE count(hh_id) > 500",
+                "HAVING count(hh_id) > 500",
+                "ORDER BY sample_size > 500",
+                "GROUP BY sample_size > 500"
+            ],
+            "answer_index": 1,
+            "domain": DOMAIN_TECHNICAL,
+            "skill": "SQL & Database Systems",
+            "difficulty": "Medium",
+            "explanation": "The HAVING clause filters aggregated groups after the GROUP BY execution, whereas the WHERE clause filters rows prior to aggregation.",
+            "source": "Relational Database Concepts for Data Analysts"
+        },
+        {
+            "id": 7,
+            "question": "When computing the Consumer Price Index (CPI), why is the Laspeyres price index typically considered to have an upward bias?",
+            "options": [
+                "It uses current-period quantities as weights",
+                "It uses base-period consumption quantities, failing to reflect consumer substitution towards relatively cheaper goods",
+                "It includes direct income taxes in the commodity pricing basket",
+                "It only samples wholesale transactions rather than retail shops"
+            ],
+            "answer_index": 1,
+            "domain": DOMAIN_STATISTICAL,
+            "skill": "Price Statistics & Indices",
+            "difficulty": "Hard",
+            "explanation": "The Laspeyres index fixes the base-period basket quantities. As prices rise unevenly, consumers substitute cheaper alternatives, so the fixed basket overstates the true cost of maintaining living standards.",
+            "source": "Manual on Consumer Price Index (ILO / MoSPI)"
+        },
+        {
+            "id": 8,
+            "question": "In digital public infrastructure for official data dissemination, what does the SDMX standard ensure?",
+            "options": [
+                "Software Driven Mail Exchange for inter-departmental notices",
+                "Statistical Data and Metadata Exchange: an open technical and statistical standard for exchanging statistical data and metadata across agencies",
+                "Satellite Data Monitoring and Exploration for GIS mapping",
+                "Structured Database Management for XML file compression"
+            ],
+            "answer_index": 1,
+            "domain": DOMAIN_DIGITAL_GOV,
+            "skill": "Digital Public Infrastructure & Cloud",
+            "difficulty": "Medium",
+            "explanation": "SDMX (Statistical Data and Metadata eXchange) is sponsored by the UN, BIS, ECB, Eurostat, IMF, OECD, and World Bank to standardize exchange of official statistics.",
+            "source": "SDMX International Standards & Guidelines"
+        }
+    ]
+
+    if domain:
+        filtered = [q for q in fallback_pool if q["domain"] == domain]
+        return filtered if filtered else fallback_pool[:count]
+    return fallback_pool[:count]
+
+
+def generate_skill_gap_feedback(learner_profile: Dict[str, Any], skill_gaps: List[Dict[str, Any]]) -> str:
+    """Generate personalized pedagogical analysis explaining skill gaps and next learning milestones."""
+    high_gaps = [g for g in skill_gaps if g["priority"] == "High Priority"]
+    med_gaps = [g for g in skill_gaps if g["priority"] == "Medium Priority"]
+
+    name = learner_profile.get("full_name", "Officer")
+    role = learner_profile.get("designation", "Statistical Analyst")
+
+    prompt = f"""
+You are the Chief Academic Advisor for India's National Academy of Statistical Administration (NASA / MoSPI).
+Write a personalized, encouraging, and clear competency diagnostic report for:
+Learner: {name}
+Role: {role}
+Department: {learner_profile.get('department', 'Official Statistics')}
+
+Top High Priority Skill Gaps:
+{json.dumps([{'skill': g['skill'], 'domain': g['domain'], 'current': g['current_score'], 'target': g['target_score'], 'gap': g['gap']} for g in high_gaps[:3]])}
+
+Medium Priority Gaps:
+{json.dumps([{'skill': g['skill'], 'current': g['current_score'], 'target': g['target_score']} for g in med_gaps[:2]])}
+
+Provide a structured, inspiring evaluation in Markdown:
+1. Executive Competency Summary (Assessment of current strengths vs critical operational gaps)
+2. Why These Skill Gaps Matter for {role} (Impact on data collection, validation, and official reporting)
+3. 3-Phase Immediate Action Roadmap (Step 1: Foundational, Step 2: Practical, Step 3: Assessment)
+4. Recommended iGOT Karmayogi Courses to enroll in today.
+"""
+    try:
+        client = get_llm()
+        resp = client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=[
+                {"role": "system", "content": "You provide executive capacity-building guidance for statistical civil servants."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.2,
+            max_tokens=1800
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"""### 📊 Competency Diagnostic Summary for {name} ({role})
+
+**Strengths:** You have established a solid foundation in core statistical principles and ethics.
+**Critical Gaps Identified:**
+{chr(10).join(f"- **{g['skill']}**: Current competency {g['current_score']}% is below the target benchmark of {g['target_score']}% (Gap: {g['gap']}%)." for g in high_gaps[:3])}
+
+**Recommended Action:**
+1. Enroll in the recommended **iGOT Karmayogi** modules for your top skill gaps.
+2. Review uploaded learning materials in the Second Brain Vault.
+3. Take practice quizzes in Quiz Mode to adaptively elevate your competency scores."""
 
 
 # ==================== FEATURE 7: SMART NOTES / SUMMARY ====================
