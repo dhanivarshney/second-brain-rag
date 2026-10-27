@@ -39,8 +39,8 @@ def inject_styles():
     }
     .stApp { background: #060b16; color: var(--ink); font-family: Manrope, sans-serif; }
     .stApp::before, .stApp::after { display: none; }
-    #MainMenu, footer, header { visibility: hidden; }
-    .block-container { max-width: 1260px; padding-top: 1.8rem; padding-bottom: 3.5rem; }
+    #MainMenu, footer { visibility: hidden; }
+    s.block-container { max-width: 1260px; padding-top: 1.8rem; padding-bottom: 3.5rem; }
     [data-testid="stSidebar"] { background: rgba(5,11,23,.95)!important; border-right: 1px solid var(--line); }
     [data-testid="stSidebar"] > div:first-child { padding-top: 1.2rem; }
 
